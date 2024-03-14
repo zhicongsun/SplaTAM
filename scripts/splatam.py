@@ -176,12 +176,14 @@ def initialize_optimizer(params, lrs_dict, tracking):
     else:
         return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
-
+# 函数目的：在全局第一次第一帧做初始化，初始化高斯点云
 def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio, 
                               mean_sq_dist_method, densify_dataset=None, gaussian_distribution=None):
     # Get RGB-D Data & Camera Parameters
+    # A.数据获取:从数据集中获取第一帧RGB-D数据（颜色、深度）、相机内参和相机位姿
     color, depth, intrinsics, pose = dataset[0]
 
+    # B.数据处理、格式处理、各项设置
     # Process RGB-D Data
     color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
     depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
@@ -193,6 +195,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio,
     # Setup Camera
     cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), w2c.detach().cpu().numpy())
 
+    # C.密集化处理:如果传参提供了密集化数据集，则做相应处理
     if densify_dataset is not None:
         # Get Densification RGB-D Data & Camera Parameters
         color, depth, densify_intrinsics, _ = densify_dataset[0]
@@ -203,6 +206,7 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio,
     else:
         densify_intrinsics = intrinsics
 
+    # D.初始化点云和初始化参数，重点函数get_pointcloud()和initialize_params()
     # Get Initial Point Cloud (PyTorch CUDA Tensor)
     mask = (depth > 0) # Mask out invalid depth values
     mask = mask.reshape(-1)
@@ -464,6 +468,7 @@ def convert_params_to_store(params):
 
 
 def rgbd_slam(config: dict):
+    #########################################################################################################
     # Print Config
     print("Loaded Config:")
     if "use_depth_loss_thres" not in config['tracking']:
@@ -475,6 +480,7 @@ def rgbd_slam(config: dict):
         config['gaussian_distribution'] = "isotropic"
     print(f"{config}")
 
+    #########################################################################################################
     # Create Output Directories
     output_dir = os.path.join(config["workdir"], config["run_name"])
     eval_dir = os.path.join(output_dir, "eval")
@@ -491,25 +497,27 @@ def rgbd_slam(config: dict):
                                name=config['wandb']['name'],
                                config=config)
 
+    #########################################################################################################
+    # 加载设备和数据集（相关代码较长，中间涉及到几个环节的Init seperate dataloader）
     # Get Device
     device = torch.device(config["primary_device"])
 
     # Load Dataset
     print("Loading Dataset ...")
     dataset_config = config["data"]
-    if "gradslam_data_cfg" not in dataset_config:
+    if "gradslam_data_cfg" not in dataset_config: 
         gradslam_data_cfg = {}
         gradslam_data_cfg["dataset_name"] = dataset_config["dataset_name"]
-    else:
+    else:#一般数据集是in
         gradslam_data_cfg = load_dataset_config(dataset_config["gradslam_data_cfg"])
-    if "ignore_bad" not in dataset_config:
-        dataset_config["ignore_bad"] = False
-    if "use_train_split" not in dataset_config:
-        dataset_config["use_train_split"] = True
+    if "ignore_bad" not in dataset_config: 
+        dataset_config["ignore_bad"] = False #一般数据集是not in
+    if "use_train_split" not in dataset_config: 
+        dataset_config["use_train_split"] = True #一般数据集是not in
     if "densification_image_height" not in dataset_config:
         dataset_config["densification_image_height"] = dataset_config["desired_image_height"]
         dataset_config["densification_image_width"] = dataset_config["desired_image_width"]
-        seperate_densification_res = False
+        seperate_densification_res = False #一般数据集这个是not in
     else:
         if dataset_config["densification_image_height"] != dataset_config["desired_image_height"] or \
             dataset_config["densification_image_width"] != dataset_config["desired_image_width"]:
@@ -519,7 +527,7 @@ def rgbd_slam(config: dict):
     if "tracking_image_height" not in dataset_config:
         dataset_config["tracking_image_height"] = dataset_config["desired_image_height"]
         dataset_config["tracking_image_width"] = dataset_config["desired_image_width"]
-        seperate_tracking_res = False
+        seperate_tracking_res = False #一般数据集这个是not in
     else:
         if dataset_config["tracking_image_height"] != dataset_config["desired_image_height"] or \
             dataset_config["tracking_image_width"] != dataset_config["desired_image_width"]:
@@ -542,10 +550,12 @@ def rgbd_slam(config: dict):
         use_train_split=dataset_config["use_train_split"],
     )
     num_frames = dataset_config["num_frames"]
-    if num_frames == -1:
+    if num_frames == -1: #一般是-1，除了iphone采集的数据集
         num_frames = len(dataset)
 
-    # Init seperate dataloader for densification if required
+    #########################################################################################################
+    # Init seperate dataloader for densification if required 
+    #一般用不到，直接到else
     if seperate_densification_res:
         densify_dataset = get_dataset(
             config_dict=gradslam_data_cfg,
@@ -568,14 +578,16 @@ def rgbd_slam(config: dict):
                                                                         config['mean_sq_dist_method'],
                                                                         densify_dataset=densify_dataset,
                                                                         gaussian_distribution=config['gaussian_distribution'])                                                                                                                  
-    else:
+    else: 
         # Initialize Parameters & Canoncial Camera parameters
+        # initialize_first_timestep()函数对第一帧做Map Initialization的地方；
         params, variables, intrinsics, first_frame_w2c, cam = initialize_first_timestep(dataset, num_frames, 
                                                                                         config['scene_radius_depth_ratio'],
                                                                                         config['mean_sq_dist_method'],
                                                                                         gaussian_distribution=config['gaussian_distribution'])
-    
+    #########################################################################################################
     # Init seperate dataloader for tracking if required
+    #一般用不到，直接跳过
     if seperate_tracking_res:
         tracking_dataset = get_dataset(
             config_dict=gradslam_data_cfg,
@@ -613,6 +625,7 @@ def rgbd_slam(config: dict):
     mapping_frame_time_count = 0
 
     # Load Checkpoint
+    #一般用不到，直接到else
     if config['load_checkpoint']:
         checkpoint_time_idx = config['checkpoint_time_idx']
         print(f"Loading Checkpoint for Frame {checkpoint_time_idx}")
@@ -650,24 +663,31 @@ def rgbd_slam(config: dict):
     else:
         checkpoint_time_idx = 0
     
+    #########################################################################################################
+    # ******************* 重点：迭代处理RGB-D帧，进行跟踪（Tracking）和建图（Mapping）*******************
     # Iterate over Scan
-    for time_idx in tqdm(range(checkpoint_time_idx, num_frames)):
+    for time_idx in tqdm(range(checkpoint_time_idx, num_frames)): # 循环迭代处理 RGB-D 帧，循环的起始索引是 checkpoint_time_idx（也就是是否从某帧开始，一般都是0开始），终止索引是 num_frames
         # Load RGBD frames incrementally instead of all frames
-        color, depth, _, gt_pose = dataset[time_idx]
+        color, depth, _, gt_pose = dataset[time_idx] # 从数据集 dataset 中加载 RGB-D 帧的颜色、深度、姿态等信息
         # Process poses
-        gt_w2c = torch.linalg.inv(gt_pose)
+        gt_w2c = torch.linalg.inv(gt_pose) # 对姿态信息进行处理，计算gt_pose的逆，也就是世界到相机的变换矩阵 gt_w2c
+        
         # Process RGB-D Data
-        color = color.permute(2, 0, 1) / 255
+        color = color.permute(2, 0, 1) / 255 # 颜色归一化
         depth = depth.permute(2, 0, 1)
+        
         gt_w2c_all_frames.append(gt_w2c)
         curr_gt_w2c = gt_w2c_all_frames
         # Optimize only current time step for tracking
         iter_time_idx = time_idx
+        
         # Initialize Mapping Data for selected frame
+        # 初始化当前帧的数据 curr_data 包括相机参数、颜色数据、深度数据等
         curr_data = {'cam': cam, 'im': color, 'depth': depth, 'id': iter_time_idx, 'intrinsics': intrinsics, 
                      'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
         
         # Initialize Data for Tracking
+        # 根据配置，初始化跟踪数据 tracking_curr_data
         if seperate_tracking_res:
             tracking_color, tracking_depth, _, _ = tracking_dataset[time_idx]
             tracking_color = tracking_color.permute(2, 0, 1) / 255
@@ -678,29 +698,44 @@ def rgbd_slam(config: dict):
             tracking_curr_data = curr_data
 
         # Optimization Iterations
+        # 设置建图迭代次数
         num_iters_mapping = config['mapping']['num_iters']
         
+        # ******************* Sec. 1  进入Camera Tracking阶段  ******************* 
+        # ** Sec 1.1 Camera Pose Initialization **
         # Initialize the camera pose for the current frame
+        # 如果当前帧索引大于 0，则初始化相机姿态参数
         if time_idx > 0:
-            params = initialize_camera_pose(params, time_idx, forward_prop=config['tracking']['forward_prop'])
+            params = initialize_camera_pose(params, time_idx, forward_prop=config['tracking']['forward_prop']) # 在configs/replica/splatam.py中，forward_prop是True
 
         # Tracking
         tracking_start_time = time.time()
+        # 如果当前时间索引 time_idx 大于 0 且不使用真实姿态
         if time_idx > 0 and not config['tracking']['use_gt_poses']:
+            # ** Sec 1.2 多个变量的重置、初始化和各项设置 **
             # Reset Optimizer & Learning Rates for tracking
+            # 重置优化器和学习率
             optimizer = initialize_optimizer(params, config['tracking']['lrs'], tracking=True)
             # Keep Track of Best Candidate Rotation & Translation
+            # 初始化变量 candidate_cam_unnorm_rot 和 candidate_cam_tran 以跟踪最佳的相机旋转和平移
             candidate_cam_unnorm_rot = params['cam_unnorm_rots'][..., time_idx].detach().clone()
             candidate_cam_tran = params['cam_trans'][..., time_idx].detach().clone()
+            # 初始化变量 current_min_loss 用于跟踪当前迭代中的最小损失
             current_min_loss = float(1e20)
+            
             # Tracking Optimization
             iter = 0
             do_continue_slam = False
             num_iters_tracking = config['tracking']['num_iters']
-            progress_bar = tqdm(range(num_iters_tracking), desc=f"Tracking Time Step: {time_idx}")
+            # 使用 tqdm 创建一个进度条，显示当前跟踪迭代的进度
+            progress_bar = tqdm(range(num_iters_tracking), desc=f"Tracking Time Step: {time_idx}") 
+            
+            
+            # ** Sec 1.3 在循环中进行迭代优化 **
             while True:
-                iter_start_time = time.time()
+                iter_start_time = time.time() # 计算迭代开始的时间
                 # Loss for current frame
+                # 重点函数：计算当前帧的损失
                 loss, variables, losses = get_loss(params, tracking_curr_data, variables, iter_time_idx, config['tracking']['loss_weights'],
                                                    config['tracking']['use_sil_for_loss'], config['tracking']['sil_thres'],
                                                    config['tracking']['use_l1'], config['tracking']['ignore_outlier_depth_loss'], tracking=True, 
@@ -709,17 +744,22 @@ def rgbd_slam(config: dict):
                 if config['use_wandb']:
                     # Report Loss
                     wandb_tracking_step = report_loss(losses, wandb_run, wandb_tracking_step, tracking=True)
-                # Backprop
+                
+                # Backprop 将loss进行反向传播,计算梯度
                 loss.backward()
+                
                 # Optimizer Update
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+
                 with torch.no_grad():
-                    # Save the best candidate rotation & translation
+                    # Save the best candidate rotation & translation  
+                    # 如果当前损失小于 current_min_loss，更新最小损失对应的相机旋转和平移
                     if loss < current_min_loss:
                         current_min_loss = loss
                         candidate_cam_unnorm_rot = params['cam_unnorm_rots'][..., time_idx].detach().clone()
                         candidate_cam_tran = params['cam_trans'][..., time_idx].detach().clone()
+                    
                     # Report Progress
                     if config['report_iter_progress']:
                         if config['use_wandb']:
@@ -729,11 +769,13 @@ def rgbd_slam(config: dict):
                             report_progress(params, tracking_curr_data, iter+1, progress_bar, iter_time_idx, sil_thres=config['tracking']['sil_thres'], tracking=True)
                     else:
                         progress_bar.update(1)
-                # Update the runtime numbers
+                
+                # Update the runtime numbers 更新迭代次数和计算迭代的运行时间
                 iter_end_time = time.time()
                 tracking_iter_time_sum += iter_end_time - iter_start_time
                 tracking_iter_time_count += 1
-                # Check if we should stop tracking
+
+                # Check if we should stop tracking 检查是否最大迭代次数，满足终止计算
                 iter += 1
                 if iter == num_iters_tracking:
                     if losses['depth'] < config['tracking']['depth_loss_thres'] and config['tracking']['use_depth_loss_thres']:
@@ -748,11 +790,15 @@ def rgbd_slam(config: dict):
                     else:
                         break
 
+            # ** Sec 1.4 数据更新与进度跟踪 **
+            # 这里从while循环出来了,更新最佳候选
             progress_bar.close()
             # Copy over the best candidate rotation & translation
             with torch.no_grad():
                 params['cam_unnorm_rots'][..., time_idx] = candidate_cam_unnorm_rot
                 params['cam_trans'][..., time_idx] = candidate_cam_tran
+        
+        # 另一个分支，即如果当前时间索引 time_idx 大于 0 且使用真实姿态
         elif time_idx > 0 and config['tracking']['use_gt_poses']:
             with torch.no_grad():
                 # Get the ground truth pose relative to frame 0
@@ -763,11 +809,14 @@ def rgbd_slam(config: dict):
                 # Update the camera parameters
                 params['cam_unnorm_rots'][..., time_idx] = rel_w2c_rot_quat
                 params['cam_trans'][..., time_idx] = rel_w2c_tran
+        
+        # 更新运行时间
         # Update the runtime numbers
         tracking_end_time = time.time()
         tracking_frame_time_sum += tracking_end_time - tracking_start_time
         tracking_frame_time_count += 1
 
+        # 报告跟踪进度,可视化进度条并自动保存参数
         if time_idx == 0 or (time_idx+1) % config['report_global_progress_every'] == 0:
             try:
                 # Report Final Tracking Progress
@@ -784,41 +833,57 @@ def rgbd_slam(config: dict):
                 save_params_ckpt(params, ckpt_output_dir, time_idx)
                 print('Failed to evaluate trajectory.')
 
+
+
+        # ******************* Sec. 2 和 Sec. 3  进入 Densification 和 KeyFrame-based Mapping 阶段 ******************* 
         # Densification & KeyFrame-based Mapping
         if time_idx == 0 or (time_idx+1) % config['map_every'] == 0:
             # Densification
+            # ******************* Sec. 2 Densification ******************* 
             if config['mapping']['add_new_gaussians'] and time_idx > 0:
                 # Setup Data for Densification
                 if seperate_densification_res:
+                    # 如果if判断成立，逐个加载RGB-D帧，而不是一次性加载所有帧
                     # Load RGBD frames incrementally instead of all frames
                     densify_color, densify_depth, _, _ = densify_dataset[time_idx]
-                    densify_color = densify_color.permute(2, 0, 1) / 255
+                    densify_color = densify_color.permute(2, 0, 1) / 255 #permute 是 PyTorch 中的一个函数，它用于改变张量（tensor）的维度顺序12。这个函数的参数是一个或多个整数，代表新的维度顺序1。例如，如果我们有一个形状为 (2, 3, 5) 的张量 x，我们可以使用 x.permute(2, 0, 1) 来改变维度的顺序。这将返回一个新的张量，其形状为 (5, 2, 3)
                     densify_depth = densify_depth.permute(2, 0, 1)
                     densify_curr_data = {'cam': densify_cam, 'im': densify_color, 'depth': densify_depth, 'id': time_idx, 
                                  'intrinsics': densify_intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
                 else:
+                    # 否则使用当前数据 curr_data
                     densify_curr_data = curr_data
 
                 # Add new Gaussians to the scene based on the Silhouette
+                # 重点函数：添加新的gaussians
                 params, variables = add_new_gaussians(params, variables, densify_curr_data, 
                                                       config['mapping']['sil_thres'], time_idx,
-                                                      config['mean_sq_dist_method'], config['gaussian_distribution'])
+                                                      config['mean_sq_dist_method'])
+                # 记录添加新的高斯后，post_num_pts是高斯分布数量
                 post_num_pts = params['means3D'].shape[0]
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
                                    "Mapping/step": wandb_time_step})
             
-            with torch.no_grad():
+            # ******************* Sec. 3 Keyframe-based Map Update ******************* 
+            # KeyFrame Selection
+            with torch.no_grad(): # 在此代码块内部进行的计算不会涉及梯度计算
                 # Get the current estimated rotation & translation
+                # 从时间索引提取当前帧相机位姿并做坐标系转换
                 curr_cam_rot = F.normalize(params['cam_unnorm_rots'][..., time_idx].detach())
                 curr_cam_tran = params['cam_trans'][..., time_idx].detach()
                 curr_w2c = torch.eye(4).cuda().float()
                 curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
                 curr_w2c[:3, 3] = curr_cam_tran
+
                 # Select Keyframes for Mapping
+                # 根据配置中的 mapping_window_size，计算需要选择的关键帧数量 num_keyframes
+                # 这里的减去2对应论文的原文，对应着"k-2个先前关键帧"的由来，在参数传入的时候就做好了k-2的限制
                 num_keyframes = config['mapping_window_size']-2
+                # 重点函数：keyframe_selection_overlap，根据重叠程度进行关键帧选择
                 selected_keyframes = keyframe_selection_overlap(depth, curr_w2c, intrinsics, keyframe_list[:-1], num_keyframes)
                 selected_time_idx = [keyframe_list[frame_idx]['id'] for frame_idx in selected_keyframes]
+                # 添加最后一帧和当前帧到关键帧列表
                 if len(keyframe_list) > 0:
                     # Add last keyframe to the selected keyframes
                     selected_time_idx.append(keyframe_list[-1]['id'])
@@ -830,6 +895,7 @@ def rgbd_slam(config: dict):
                 print(f"\nSelected Keyframes at Frame {time_idx}: {selected_time_idx}")
 
             # Reset Optimizer & Learning Rates for Full Map Optimization
+            # 执行Mapping的优化前，初始化优化器
             optimizer = initialize_optimizer(params, config['mapping']['lrs'], tracking=False) 
 
             # Mapping
@@ -855,6 +921,7 @@ def rgbd_slam(config: dict):
                 iter_data = {'cam': cam, 'im': iter_color, 'depth': iter_depth, 'id': iter_time_idx, 
                              'intrinsics': intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': iter_gt_w2c}
                 # Loss for current frame
+                # 重点函数：计算当前帧的损失
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
                                                 config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True)
@@ -865,12 +932,14 @@ def rgbd_slam(config: dict):
                 loss.backward()
                 with torch.no_grad():
                     # Prune Gaussians
+                    # 以configs/replica/splatam.py为例，config['mapping']['prune_gaussians']=True，执行
                     if config['mapping']['prune_gaussians']:
                         params, variables = prune_gaussians(params, variables, optimizer, iter, config['mapping']['pruning_dict'])
                         if config['use_wandb']:
                             wandb_run.log({"Mapping/Number of Gaussians - Pruning": params['means3D'].shape[0],
                                            "Mapping/step": wandb_mapping_step})
                     # Gaussian-Splatting's Gradient-based Densification
+                    # 以configs/replica/splatam.py为例，config['mapping']['use_gaussian_splatting_densification']=False，不执行
                     if config['mapping']['use_gaussian_splatting_densification']:
                         params, variables = densify(params, variables, optimizer, iter, config['mapping']['densify_dict'])
                         if config['use_wandb']:
@@ -1001,15 +1070,15 @@ def rgbd_slam(config: dict):
         wandb.finish()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()#创建了一个新的命令行输入解析对象
 
-    parser.add_argument("experiment", type=str, help="Path to experiment file")
+    parser.add_argument("experiment", type=str, help="Path to experiment file") #添加了一个命令行参数，这个参数名字是 “experiment”，它的类型是字符串，它的帮助信息是 “Path to experiment file”
 
-    args = parser.parse_args()
+    args = parser.parse_args()#解析命令行输入，并将结果存储在 args.experiment 中，例：python scripts/splatam.py configs/replica/splatam.py
 
     experiment = SourceFileLoader(
         os.path.basename(args.experiment), args.experiment
-    ).load_module()
+    ).load_module()#加载了一个 Python 模块，这个模块的路径是从命令行输入中获取的
 
     # Set Experiment Seed
     seed_everything(seed=experiment.config['seed'])
@@ -1017,9 +1086,9 @@ if __name__ == "__main__":
     # Create Results Directory and Copy Config
     results_dir = os.path.join(
         experiment.config["workdir"], experiment.config["run_name"]
-    )
-    if not experiment.config['load_checkpoint']:
+    )#创建了一个结果目录的路径，这个路径是由工作目录和运行名称拼接而成的，这两个值都是从加载的模块的配置中获取的
+    if not experiment.config['load_checkpoint']:#检查配置中的 ‘load_checkpoint’ 选项。如果这个选项为 False，那么就会创建结果目录，并将配置文件复制到结果目录中
         os.makedirs(results_dir, exist_ok=True)
         shutil.copy(args.experiment, os.path.join(results_dir, "config.py"))
-
+        # 例如会将configs/replica/splatam.py复制到experiments/replica/room0_0/下，命名为config.py
     rgbd_slam(experiment.config)
