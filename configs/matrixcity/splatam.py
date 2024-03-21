@@ -27,11 +27,12 @@ config = dict(
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
     mapping_window_size=mapping_window_size, # Mapping window size
-    report_global_progress_every=500, # Report Global Progress every nth frame
+    report_global_progress_every=500, # 多久报告跟踪进度,可视化进度条并自动保存参数Report Global Progress every nth frame
     eval_every=5, # Evaluate every nth frame (at end of SLAM)
-    scene_radius_depth_ratio=3, # Max First Frame Depth to Scene Radius Ratio (For Pruning/Densification)
-    mean_sq_dist_method="projective", # ["projective", "knn"] (Type of Mean Squared Distance Calculation for Scale of Gaussians)
-    gaussian_distribution="isotropic", # ["isotropic", "anisotropic"] (Isotropic -> Spherical Covariance, Anisotropic -> Ellipsoidal Covariance)
+    scene_radius_depth_ratio=3, # 第一帧最大深度与场景半径的比率 Max First Frame Depth to Scene Radius Ratio (For Pruning/Densification) 
+    # 对应论文中的focal length，用于初始化高斯半径r = D_{GT}/focal length，代码为variables['scene_radius'] = torch.max(depth)/scene_radius_depth_ratio
+    mean_sq_dist_method="projective", # 计算均方距离的方法["projective", "knn"] (Type of Mean Squared Distance Calculation for Scale of Gaussians)
+    gaussian_distribution="isotropic", # 各向同性还是异性["isotropic", "anisotropic"] (Isotropic -> Spherical Covariance, Anisotropic -> Ellipsoidal Covariance)
     report_iter_progress=False,
     load_checkpoint=False,
     checkpoint_time_idx=0,
@@ -47,15 +48,15 @@ config = dict(
         eval_save_qual=True,
     ),
     data=dict(
-        basedir="./data/MatrixCitySmallAerial",
-        gradslam_data_cfg="./configs/data/matrixcitysmallaerial.yaml",
+        basedir="./data/MatrixCitySmallAerial", #done
+        gradslam_data_cfg="./configs/data/matrixcitysmallaerial.yaml", #not done
         sequence=scene_name,
-        desired_image_height=1080,
-        desired_image_width=1920,
+        desired_image_height=1080,#done
+        desired_image_width=1920,#done
         start=0,
         end=-1,
         stride=1,
-        num_frames=-1,
+        num_frames=-1, #默认
     ),
     tracking=dict(
         use_gt_poses=False, # Use GT Poses for Tracking
@@ -118,7 +119,7 @@ config = dict(
         offset_first_viz_cam=True, # Offsets the view camera back by 0.5 units along the view direction (For Final Recon Viz)
         show_sil=False, # Show Silhouette instead of RGB
         visualize_cams=True, # Visualize Camera Frustums and Trajectory
-        viz_w=600, viz_h=340,
+        viz_w=960, viz_h=540,
         viz_near=0.01, viz_far=100.0,
         view_scale=2,
         viz_fps=5, # FPS for Online Recon Viz
