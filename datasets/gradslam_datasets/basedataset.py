@@ -24,6 +24,8 @@ from natsort import natsorted
 from .geometryutils import relative_transformation
 from . import datautils
 
+os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"#使得cv2可以读取exr文件
+
 
 def to_scalar(inp: Union[np.ndarray, torch.Tensor, float]) -> Union[int, float]:
     """
@@ -67,7 +69,7 @@ def from_intrinsics_matrix(K):
     return fx, fy, cx, cy
 
 
-def readEXR_onlydepth(filename):
+def readEXR_onlydepth(filename):#最终没用到
     """
     Read depth data from EXR image file.
 
@@ -86,8 +88,8 @@ def readEXR_onlydepth(filename):
     exrfile = exr.InputFile(filename)
     header = exrfile.header()
     dw = header["dataWindow"]
-    isize = (dw.max.y - dw.min.y + 1, dw.max.x - dw.min.x + 1)
 
+    isize = (dw.max.y - dw.min.y + 1, dw.max.x - dw.min.x + 1)
     channelData = dict()
 
     for c in header["channels"]:
@@ -98,7 +100,6 @@ def readEXR_onlydepth(filename):
         channelData[c] = C
 
     Y = None if "Y" not in header["channels"] else channelData["Y"]
-
     return Y
 
 
@@ -297,13 +298,11 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         color_path = self.color_paths[index]
         depth_path = self.depth_paths[index]
         color = np.asarray(imageio.imread(color_path), dtype=float)
-        color = self._preprocess_color(color)
+        color = self._preprocess_color(color)[:,:,:3]
         if ".png" in depth_path:
-            # depth_data = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
             depth = np.asarray(imageio.imread(depth_path), dtype=np.int64)
         elif ".exr" in depth_path:
-            depth = readEXR_onlydepth(depth_path)
-
+            depth = cv2.imread(depth_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)[...,0] #(H, W) 更改处理方式
         K = as_intrinsics_matrix([self.fx, self.fy, self.cx, self.cy])
         if self.distortion is not None:
             # undistortion is only applied on color image, not depth!
