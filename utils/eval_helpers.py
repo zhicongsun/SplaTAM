@@ -426,6 +426,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         os.makedirs(depth_dir, exist_ok=True)
 
     gt_w2c_list = []
+
     for time_idx in tqdm(range(num_frames)):
          # Get RGB-D Data & Camera Parameters
         color, depth, intrinsics, pose = dataset[time_idx]
@@ -472,6 +473,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         
         # Render RGB and Calculate PSNR
         im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+
         if mapping_iters==0 and not add_new_gaussians:
             weighted_im = im * presence_sil_mask * valid_depth_mask
             weighted_gt_im = curr_data['im'] * presence_sil_mask * valid_depth_mask
@@ -526,7 +528,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
             depth_colormap = cv2.applyColorMap((normalized_depth * 255).astype(np.uint8), cv2.COLORMAP_JET)
             cv2.imwrite(os.path.join(rgb_dir, "gt_{:04d}.png".format(time_idx)), cv2.cvtColor(viz_gt_im*255, cv2.COLOR_RGB2BGR))
             cv2.imwrite(os.path.join(depth_dir, "gt_{:04d}.png".format(time_idx)), depth_colormap)
-        
+
         # Plot the Ground Truth and Rasterized RGB & Depth, along with Silhouette
         fig_title = "Time Step: {}".format(time_idx)
         plot_name = "%04d" % time_idx
@@ -573,7 +575,7 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
     except:
         ate_rmse = 100.0
         print('Failed to evaluate trajectory with alignment.')
-    
+
     # Compute Average Metrics
     psnr_list = np.array(psnr_list)
     rmse_list = np.array(rmse_list)

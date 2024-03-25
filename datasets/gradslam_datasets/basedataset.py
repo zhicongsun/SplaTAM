@@ -24,7 +24,7 @@ from natsort import natsorted
 from .geometryutils import relative_transformation
 from . import datautils
 
-os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"#使得cv2可以读取exr文件
+os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1" #使得cv2可以读取exr文件
 
 
 def to_scalar(inp: Union[np.ndarray, torch.Tensor, float]) -> Union[int, float]:
@@ -255,7 +255,7 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         depth = np.expand_dims(depth, -1)
         if self.channels_first:
             depth = datautils.channels_first(depth)
-        return depth / self.png_depth_scale
+        return depth / self.png_depth_scale #注意这个处理
 
     def _preprocess_poses(self, poses: torch.Tensor):
         r"""Preprocesses the poses by setting first pose in a sequence to identity and computing the relative
@@ -302,7 +302,7 @@ class GradSLAMDataset(torch.utils.data.Dataset):
         if ".png" in depth_path:
             depth = np.asarray(imageio.imread(depth_path), dtype=np.int64)
         elif ".exr" in depth_path:
-            depth = cv2.imread(depth_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)[...,0] #(H, W) 更改处理方式
+            depth = cv2.imread(depth_path, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)[...,0] #读取深度图的方式
         K = as_intrinsics_matrix([self.fx, self.fy, self.cx, self.cy])
         if self.distortion is not None:
             # undistortion is only applied on color image, not depth!
