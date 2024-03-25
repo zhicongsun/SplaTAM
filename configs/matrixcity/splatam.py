@@ -11,10 +11,10 @@ scene_name = scenes[0]
 group_name = "MatrixCity"
 run_name = f"{scene_name}_{seed}"
 
-map_every = 1 # densification every nth frame
+map_every = 1 # 多少帧进行一次densification
 keyframe_every = 5 # adding keyframe every nth frame
-mapping_window_size = 24
-tracking_iters = 40
+mapping_window_size = 24 #关键帧的数目
+tracking_iters = 40 #每一帧的tracking的循环迭代的次数
 mapping_iters = 60
 
 

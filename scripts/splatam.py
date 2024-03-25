@@ -595,10 +595,11 @@ def rgbd_slam(config: dict):
         输入：splatam.py模块中的config字典
     '''
     '''
-        A1. Print Config
+        1.1 Print Config
     '''
     print("Loaded Config:")
     if "use_depth_loss_thres" not in config['tracking']:
+        # not in则不使用深度误差的阈值来决定tracking是否停止，matrixcity是not in并且直接用迭代最大值来决定是否停止
         config['tracking']['use_depth_loss_thres'] = False
         config['tracking']['depth_loss_thres'] = 100000
     if "visualize_tracking_loss" not in config['tracking']:
@@ -607,7 +608,7 @@ def rgbd_slam(config: dict):
         config['gaussian_distribution'] = "isotropic"
     print(f"{config}")
     '''
-        A2. 输出文件的保存路径Create Output Directories
+        1.2 输出文件的保存路径Create Output Directories
         workdir： "./experiments/{group_name}", 例如：gruop_name: "MatrixCity"，workdir： "./experiments/MatrixCity"
         run_name： "{scene_name}_{seed}", 例如: scene_name = scenes[0], scenes = ["smallaerial"], seed = 0, run_name = "smallaerial_0"
     '''
@@ -615,7 +616,7 @@ def rgbd_slam(config: dict):
     eval_dir = os.path.join(output_dir, "eval")
     os.makedirs(eval_dir, exist_ok=True)
     '''
-        A3. Init WandB
+        1.3 Init WandB
     '''
     if config['use_wandb']:
         wandb_time_step = 0
@@ -627,7 +628,7 @@ def rgbd_slam(config: dict):
                                name=config['wandb']['name'],
                                config=config)
     '''
-        B. 加载设备和数据集（相关代码较长，中间涉及到几个环节的Init seperate dataloader）
+        2 加载设备和数据集（相关代码较长，中间涉及到几个环节的Init seperate dataloader）
     '''
     # Get Device
     device = torch.device(config["primary_device"])
@@ -643,10 +644,11 @@ def rgbd_slam(config: dict):
         dataset_config["ignore_bad"] = False #一般数据集是not in
     if "use_train_split" not in dataset_config: 
         dataset_config["use_train_split"] = True #一般数据集是not in
-    if "densification_image_height" not in dataset_config:
+    if "densification_image_height" not in dataset_config: 
+        #如果not in，则在Densification的时候一次加载当前帧和之前所有帧的数据，Matrixcity是not in
         dataset_config["densification_image_height"] = dataset_config["desired_image_height"]
         dataset_config["densification_image_width"] = dataset_config["desired_image_width"]
-        seperate_densification_res = False #一般数据集这个是not in
+        seperate_densification_res = False 
     else:
         if dataset_config["densification_image_height"] != dataset_config["desired_image_height"] or \
             dataset_config["densification_image_width"] != dataset_config["desired_image_width"]:
@@ -682,7 +684,7 @@ def rgbd_slam(config: dict):
     if num_frames == -1: #一般是-1，除了iphone采集的数据集
         num_frames = len(dataset) #数据集帧总数
     '''
-        C. 第一帧初始化，初始化高斯点云
+        3 第一帧初始化，初始化高斯点云
         直接看else部分
     '''
     # Init seperate dataloader for densification if required 
@@ -752,20 +754,20 @@ def rgbd_slam(config: dict):
                                     tracking_intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy())
     
     '''
-        D. 初始化用于记录slam的变量
-        1. 带时间戳的关键帧列表
-        2. 迭代过的真实位姿
-        3. mapping和tracking的计时变量
+        4 初始化用于记录整个slam的变量
+            1. 带时间戳的关键帧列表
+            2. 迭代过的真实位姿
+            3. mapping和tracking的计时变量
     '''
     keyframe_list = []# Initialize list to keep track of Keyframes
     keyframe_time_indices = []
     # Init Variables to keep track of ground truth poses
     gt_w2c_all_frames = []
     # tracking的计时
-    tracking_iter_time_sum = 0 #tracking的迭代时间之和
-    tracking_iter_time_count = 0 #tracking的迭代数
-    tracking_frame_time_sum = 0 #tracking的帧处理时间之和
-    tracking_frame_time_count = 0 #tracking的帧数
+    tracking_iter_time_sum = 0 #SLAM-Tracking的总迭代时间之和
+    tracking_iter_time_count = 0 #SLAM-Tracking的总迭代数
+    tracking_frame_time_sum = 0 #SLAM-Tracking的帧处理总时间之和
+    tracking_frame_time_count = 0 #SLAM-Tracking的总帧数
     # mapping的计时
     mapping_iter_time_sum = 0
     mapping_iter_time_count = 0
@@ -814,12 +816,12 @@ def rgbd_slam(config: dict):
         checkpoint_time_idx = 0 
     
     '''
-        E. 以时间顺序处理RGB-D帧，进行跟踪（Tracking）和建图（Mapping）
+        5 SLAM：以时间顺序处理RGB-D帧，进行跟踪（Tracking）和建图（Mapping）
     '''
     # Iterate over Scan
     for time_idx in tqdm(range(checkpoint_time_idx, num_frames)): #循环迭代处理 RGB-D 帧，循环的起始索引是 checkpoint_time_idx（也就是是否从某帧开始，一般都是0开始），终止索引是 num_frames
         '''
-            E.1. 获取并处理当前time_idx下的rgbd,w2c
+            5.1 获取并处理当前time_idx下的rgbd,w2c
         '''
         color, depth, _, gt_pose = dataset[time_idx] #从数据集 dataset 中incrementally地加载 RGB-D 帧的颜色、深度、姿态等信息
         gt_w2c = torch.linalg.inv(gt_pose) # 对姿态信息进行处理，计算gt_pose的逆，也就是世界到相机的变换矩阵 gt_w2c
@@ -834,7 +836,7 @@ def rgbd_slam(config: dict):
         iter_time_idx = time_idx # Optimize only current time step for tracking
 
         '''
-            E.2. 初始化用于mapping和tracking的数据，包括：相机模型，当前time_idx的rgbd，相机内参，第一帧外参，迭代过程至今的外参curr_gt_w2c
+            5.2 初始化用于mapping和tracking的数据，包括：相机模型，当前time_idx的rgbd，相机内参，第一帧外参，迭代过程至今的外参curr_gt_w2c
         '''
         curr_data = {'cam': cam, 'im': color, 'depth': depth, 'id': iter_time_idx, 'intrinsics': intrinsics, 
                      'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}# 初始化用于mapping（选择frame）的数据curr_data
@@ -853,24 +855,38 @@ def rgbd_slam(config: dict):
             params = initialize_camera_pose(params, time_idx, forward_prop=config['tracking']['forward_prop']) # 在configs/replica/splatam.py中，forward_prop是True
 
         '''
-            C.3. Tracking
+            5.3 Tracking
         '''
         tracking_start_time = time.time()
         if time_idx > 0 and not config['tracking']['use_gt_poses']: # 如果当前时间索引 time_idx 大于 0 且不使用真实姿态
             # ** Sec 1.2 多个变量的重置、初始化和各项设置 **
+            '''
+                Tracking.Step1 初始化：
+                    1. 优化器optimizer
+                    2. 候选位姿candidate_cam_unnorm_rot，candidate_cam_tran
+                    3. 最小loss
+                    4. 针对一帧Tracking的迭代计数器iter，do_continue_slam，最大迭代数
+                    5. 进度条：progress_bar，显示当前是第几帧
+            '''
             optimizer = initialize_optimizer(params, config['tracking']['lrs'], tracking=True)# 重置优化器和学习率（Reset Optimizer & Learning Rates for tracking）
             candidate_cam_unnorm_rot = params['cam_unnorm_rots'][..., time_idx].detach().clone()# 初始化变量candidate_cam_unnorm_rot以跟踪最佳的相机旋转（Keep Track of Best Candidate Rotation & Translation）
             candidate_cam_tran = params['cam_trans'][..., time_idx].detach().clone()# 初始化变量candidate_cam_tran以跟踪最佳的相机平移
             current_min_loss = float(1e20)# 初始化变量 current_min_loss 用于跟踪当前迭代中的最小损失
             
-            # Tracking Optimization
-            iter = 0 #迭代次数记数
-            do_continue_slam = False
-            num_iters_tracking = config['tracking']['num_iters'] #最大迭代次数
+            iter = 0 #循环迭代次数记数，每一帧都会初始化一次
+            do_continue_slam = False #matrixcity中实际上没用到
+            num_iters_tracking = config['tracking']['num_iters'] #针对每一帧Tracking的最大迭代次数
+            
             progress_bar = tqdm(range(num_iters_tracking), desc=f"Tracking Time Step: {time_idx}")# 使用 tqdm 创建一个进度条，显示当前跟踪迭代的进度 
             
-            while True:#在循环中进行迭代优化
+            '''
+                Tracking.Step2 迭代优化位姿
+            '''
+            while True:
                 iter_start_time = time.time() # 计算迭代开始的时间
+                '''
+                    Tracking.Step2.A 计算loss，backward，Optimization
+                '''
                 loss, variables, losses = get_loss(params, tracking_curr_data, variables, iter_time_idx, config['tracking']['loss_weights'],
                                                    config['tracking']['use_sil_for_loss'], config['tracking']['sil_thres'],
                                                    config['tracking']['use_l1'], config['tracking']['ignore_outlier_depth_loss'], tracking=True, 
@@ -883,9 +899,11 @@ def rgbd_slam(config: dict):
                 optimizer.step()# Optimizer Update
                 optimizer.zero_grad(set_to_none=True)
 
-                with torch.no_grad():
-                    # Save the best candidate rotation & translation  
-                    # 如果当前损失小于 current_min_loss，更新最小损失对应的相机旋转和平移
+                '''
+                    Tracking.Step2.B 更新当前最优loss对应的位姿
+                '''
+                with torch.no_grad():#梯度参数不变情况下
+                    # 如果当前损失小于 current_min_loss，更新最小损失对应的相机旋转和平移 Save the best candidate rotation & translation  
                     if loss < current_min_loss:
                         current_min_loss = loss
                         candidate_cam_unnorm_rot = params['cam_unnorm_rots'][..., time_idx].detach().clone()
@@ -901,37 +919,46 @@ def rgbd_slam(config: dict):
                     else:
                         progress_bar.update(1)
                 
-                #更新迭代次数和迭代的运行时间 Update the runtime numbers 
+                '''
+                    Tracking.Step2.C 更新迭代计数，判断是否结束迭代
+                    Matrixcity达到最大迭代次数直接stop
+                '''
+                #更新:SLAM-Tracking总循环迭代次数、总循环迭代的运行时间、针对当前帧tracking的循环迭代次数iter
+                #频率：每一次迭代
                 iter_end_time = time.time()
                 tracking_iter_time_sum += iter_end_time - iter_start_time
                 tracking_iter_time_count += 1
-
-                # 检查是否最大迭代次数，满足则终止计算 Check if we should stop tracking 
-                iter += 1
-                if iter == num_iters_tracking:#到达最大迭代次数
-                    # (Ignore) matrixcitydataset默认：config['tracking']['depth_loss_thres'] = 100000，config['tracking']['use_depth_loss_thres'] = False
+                
+                iter += 1 #每一次迭代更新当前帧的迭代次数
+                if iter == num_iters_tracking:
+                    '''
+                        判断是否要结束当前帧的Tracking：检查是否最大迭代次数，满足则终止计算 Check if we should stop tracking 
+                        Matrixcity达到最大迭代次数直接stop
+                    '''
                     if losses['depth'] < config['tracking']['depth_loss_thres'] and config['tracking']['use_depth_loss_thres']:
-                        break
-                    elif config['tracking']['use_depth_loss_thres'] and not do_continue_slam:#do_continue_slam默认false
+                        # (Ignore) matrixcitydataset默认：config['tracking']['depth_loss_thres'] = 100000满足；config['tracking']['use_depth_loss_thres'] = False不满足
+                        break 
+                    elif config['tracking']['use_depth_loss_thres'] and not do_continue_slam: 
+                        # (Ignore)每一帧do_continue_slam初始化是false，满足；但config['tracking']['use_depth_loss_thres'] = False不满足
                         do_continue_slam = True
                         progress_bar = tqdm(range(num_iters_tracking), desc=f"Tracking Time Step: {time_idx}")
                         num_iters_tracking = 2*num_iters_tracking
                         if config['use_wandb']:
                             wandb_run.log({"Tracking/Extra Tracking Iters Frames": time_idx,
                                         "Tracking/step": wandb_time_step})
-                    else:
+                    else:#Matrixcity达到最大迭代次数直接stop
                         break
 
-            # ** Sec 1.4 数据更新与进度跟踪 **
-            # 这里从while循环出来了,更新最佳候选
-            progress_bar.close()
-            # Copy over the best candidate rotation & translation
-            with torch.no_grad():
+            '''
+                Tracking.Step3 Tracking迭代优化位姿结束，更新最优位姿
+            '''
+            progress_bar.close() 
+            with torch.no_grad():# 从while循环出来了,更新最佳位姿，Copy over the best candidate rotation & translation
                 params['cam_unnorm_rots'][..., time_idx] = candidate_cam_unnorm_rot
                 params['cam_trans'][..., time_idx] = candidate_cam_tran
         
-        # （Ignore）另一个分支:如果当前时间索引 time_idx 大于 0 且使用真实姿态
-        elif time_idx > 0 and config['tracking']['use_gt_poses']:#matrixcity中config['tracking']['use_gt_poses']=false
+        # （Ignore）另一个分支:如果当前时间索引 time_idx 大于 0 且使用真实姿态，但matrixcity中config['tracking']['use_gt_poses']=false不满足
+        elif time_idx > 0 and config['tracking']['use_gt_poses']:
             with torch.no_grad():
                 # Get the ground truth pose relative to frame 0
                 rel_w2c = curr_gt_w2c[-1]
@@ -942,7 +969,11 @@ def rgbd_slam(config: dict):
                 params['cam_unnorm_rots'][..., time_idx] = rel_w2c_rot_quat
                 params['cam_trans'][..., time_idx] = rel_w2c_tran
         
-        # 更新运行时间Update the runtime numbers
+        '''
+            5.4 更新Tracking的计时器，报告跟踪进度
+        '''
+        # 更新：SLAM-Tracking帧的总运行时间和帧数
+        # 频率：每一帧Tracking完更新一次
         tracking_end_time = time.time()
         tracking_frame_time_sum += tracking_end_time - tracking_start_time
         tracking_frame_time_count += 1
@@ -966,72 +997,77 @@ def rgbd_slam(config: dict):
 
 
         '''
-            Densification
+            5.5 Densification & Keyframe Selection & Mapping
         '''
         # ******************* Sec. 2 和 Sec. 3  进入 Densification 和 KeyFrame-based Mapping 阶段 ******************* 
         # Densification & KeyFrame-based Mapping
-        if time_idx == 0 or (time_idx+1) % config['map_every'] == 0:
-            # Densification
-            # ******************* Sec. 2 Densification ******************* 
+        if time_idx == 0 or (time_idx+1) % config['map_every'] == 0: #第一帧开始Densification，然后每map_every帧一次，例如map_every=3，则致密化的是：第1帧，第3帧...
+            '''
+                Densification
+            '''
             if config['mapping']['add_new_gaussians'] and time_idx > 0:
-                # Setup Data for Densification
-                if seperate_densification_res:
-                    # 如果if判断成立，逐个加载RGB-D帧，而不是一次性加载所有帧
-                    # Load RGBD frames incrementally instead of all frames
+                '''
+                    Densification.Step1 设置Densification的数据源
+                    if 满足用当前帧，else用当前帧和之前所有帧，matrixcity是后者
+                '''
+                if seperate_densification_res:# 如果if判断成立，逐个加载RGB-D帧，而不是一次性加载所有帧
                     densify_color, densify_depth, _, _ = densify_dataset[time_idx]
                     densify_color = densify_color.permute(2, 0, 1) / 255 #permute 是 PyTorch 中的一个函数，它用于改变张量（tensor）的维度顺序12。这个函数的参数是一个或多个整数，代表新的维度顺序1。例如，如果我们有一个形状为 (2, 3, 5) 的张量 x，我们可以使用 x.permute(2, 0, 1) 来改变维度的顺序。这将返回一个新的张量，其形状为 (5, 2, 3)
                     densify_depth = densify_depth.permute(2, 0, 1)
                     densify_curr_data = {'cam': densify_cam, 'im': densify_color, 'depth': densify_depth, 'id': time_idx, 
                                  'intrinsics': densify_intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
-                else:
-                    # 否则使用当前数据 curr_data
+                else: # 否则使用包含当前帧和之前帧的数据 curr_data,matrixcity是这个
                     densify_curr_data = curr_data
-
-                # Add new Gaussians to the scene based on the Silhouette
-                # 重点函数：添加新的gaussians
+                '''
+                    Densification.Step2 添加新的gaussians
+                    Add new Gaussians to the scene based on the Silhouette
+                '''
                 params, variables = add_new_gaussians(params, variables, densify_curr_data, 
                                                       config['mapping']['sil_thres'], time_idx,
                                                       config['mean_sq_dist_method'],"isotropic")
-                # 记录添加新的高斯后，post_num_pts是高斯分布数量
-                post_num_pts = params['means3D'].shape[0]
+                post_num_pts = params['means3D'].shape[0]# 记录添加新的高斯后，post_num_pts是高斯分布数量
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
                                    "Mapping/step": wandb_time_step})
             
             # ******************* Sec. 3 Keyframe-based Map Update ******************* 
-            # KeyFrame Selection
+            '''
+                KeyFrame Selection
+            '''
             with torch.no_grad(): # 在此代码块内部进行的计算不会涉及梯度计算
-                # Get the current estimated rotation & translation
-                # 从时间索引提取当前帧相机位姿并做坐标系转换
+                '''
+                    KeyFrame Selection.Step1 从时间索引提取当前帧相机位姿并做坐标系转换
+                    Get the current estimated rotation & translation
+                '''
                 curr_cam_rot = F.normalize(params['cam_unnorm_rots'][..., time_idx].detach())
                 curr_cam_tran = params['cam_trans'][..., time_idx].detach()
                 curr_w2c = torch.eye(4).cuda().float()
                 curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
                 curr_w2c[:3, 3] = curr_cam_tran
-
-                # Select Keyframes for Mapping
-                # 根据配置中的 mapping_window_size，计算需要选择的关键帧数量 num_keyframes
-                # 这里的减去2对应论文的原文，对应着"k-2个先前关键帧"的由来，在参数传入的时候就做好了k-2的限制
-                num_keyframes = config['mapping_window_size']-2
+                '''
+                    KeyFrame Selection.Step2
+                    根据配置中的 mapping_window_size，计算需要选择的关键帧数量 num_keyframes
+                '''
+                num_keyframes = config['mapping_window_size']-2 #这里的减去2对应论文的原文，对应着"k-2个先前关键帧"的由来，在参数传入的时候就做好了k-2的限制
                 # 重点函数：keyframe_selection_overlap，根据重叠程度进行关键帧选择
                 selected_keyframes = keyframe_selection_overlap(depth, curr_w2c, intrinsics, keyframe_list[:-1], num_keyframes)
                 selected_time_idx = [keyframe_list[frame_idx]['id'] for frame_idx in selected_keyframes]
-                # 添加最后一帧和当前帧到关键帧列表
-                if len(keyframe_list) > 0:
-                    # Add last keyframe to the selected keyframes
+                
+                if len(keyframe_list) > 0: # 添加最后一帧的id和当前帧到关键帧列表
                     selected_time_idx.append(keyframe_list[-1]['id'])
                     selected_keyframes.append(len(keyframe_list)-1)
                 # Add current frame to the selected keyframes
                 selected_time_idx.append(time_idx)
                 selected_keyframes.append(-1)
-                # Print the selected keyframes
-                print(f"\nSelected Keyframes at Frame {time_idx}: {selected_time_idx}")
+                print(f"\nSelected Keyframes at Frame {time_idx}: {selected_time_idx}")# Print the selected keyframes
 
             # Reset Optimizer & Learning Rates for Full Map Optimization
             # 执行Mapping的优化前，初始化优化器
             optimizer = initialize_optimizer(params, config['mapping']['lrs'], tracking=False) 
 
-            # Mapping
+            '''
+                Mapping
+            '''
             mapping_start_time = time.time()
             if num_iters_mapping > 0:
                 progress_bar = tqdm(range(num_iters_mapping), desc=f"Mapping Time Step: {time_idx}")
