@@ -4,7 +4,7 @@ from os.path import join as p_join
 scenes = ["smallaerial"] 
 
 primary_device="cuda:0"
-seed = 0
+seed = 1
 scene_name = scenes[0]
 
 
@@ -87,6 +87,7 @@ config = dict(
         use_l1=True,
         use_sil_for_loss=False,
         ignore_outlier_depth_loss=False,
+        use_gaussian_splatting_densification = False,#自己加的
         loss_weights=dict(
             im=0.5,
             depth=1.0,
