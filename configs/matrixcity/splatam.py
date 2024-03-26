@@ -13,7 +13,7 @@ run_name = f"{scene_name}_{seed}"
 
 map_every = 1 # 多少帧进行一次densification
 keyframe_every = 5 # adding keyframe every nth frame
-mapping_window_size = 24 #关键帧的数目
+mapping_window_size = 24 #关键帧的数目，超参
 tracking_iters = 40 #每一帧的tracking的循环迭代的次数
 mapping_iters = 60
 
