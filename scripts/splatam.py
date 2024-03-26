@@ -999,13 +999,11 @@ def rgbd_slam(config: dict):
         '''
             5.5 Densification & Keyframe Selection & Mapping
         '''
-        # ******************* Sec. 2 和 Sec. 3  进入 Densification 和 KeyFrame-based Mapping 阶段 ******************* 
-        # Densification & KeyFrame-based Mapping
         if time_idx == 0 or (time_idx+1) % config['map_every'] == 0: #第一帧开始Densification，然后每map_every帧一次，例如map_every=3，则致密化的是：第1帧，第3帧...
             '''
-                Densification
+                5.5.1 Densification
             '''
-            if config['mapping']['add_new_gaussians'] and time_idx > 0:
+            if config['mapping']['add_new_gaussians'] and time_idx > 0: #第二帧开始
                 '''
                     Densification.Step1 设置Densification的数据源
                     if 满足用当前帧，else用当前帧和之前所有帧，matrixcity是后者
@@ -1030,9 +1028,8 @@ def rgbd_slam(config: dict):
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
                                    "Mapping/step": wandb_time_step})
             
-            # ******************* Sec. 3 Keyframe-based Map Update ******************* 
             '''
-                KeyFrame Selection
+                5.5.2 KeyFrame Selection
             '''
             with torch.no_grad(): # 在此代码块内部进行的计算不会涉及梯度计算
                 '''
@@ -1045,28 +1042,28 @@ def rgbd_slam(config: dict):
                 curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
                 curr_w2c[:3, 3] = curr_cam_tran
                 '''
-                    KeyFrame Selection.Step2
+                    KeyFrame Selection.Step2 根据重合度从关键帧列表（除去最后一帧关键帧）选择k-2个关键帧+当前帧+最后一帧关键帧
                     根据配置中的 mapping_window_size，计算需要选择的关键帧数量 num_keyframes
                 '''
                 num_keyframes = config['mapping_window_size']-2 #这里的减去2对应论文的原文，对应着"k-2个先前关键帧"的由来，在参数传入的时候就做好了k-2的限制
-                # 重点函数：keyframe_selection_overlap，根据重叠程度进行关键帧选择
-                selected_keyframes = keyframe_selection_overlap(depth, curr_w2c, intrinsics, keyframe_list[:-1], num_keyframes)
-                selected_time_idx = [keyframe_list[frame_idx]['id'] for frame_idx in selected_keyframes]
-                
-                if len(keyframe_list) > 0: # 添加最后一帧的id和当前帧到关键帧列表
+                # selected_keyframes是一个列表，列表的元素frame_idx对应keyframe_list里的index，每次调用keyframe_selection_overlap都更新一次，最小值0，最大值为keyframe_list-2或num_keyframes-1
+                selected_keyframes = keyframe_selection_overlap(depth, curr_w2c, intrinsics, keyframe_list[:-1], num_keyframes)#根据重叠程度进行关键帧选择，selected_keyframes是id
+                # selected_time_idx是时间戳列表，里面的元素代表第几帧，例如0代表第一帧
+                selected_time_idx = [keyframe_list[frame_idx]['id'] for frame_idx in selected_keyframes] 
+                # 添加keyframe最后一帧的时间戳和keyframe index
+                if len(keyframe_list) > 0: 
                     selected_time_idx.append(keyframe_list[-1]['id'])
                     selected_keyframes.append(len(keyframe_list)-1)
-                # Add current frame to the selected keyframes
+                # 添加当前帧的时间戳和keyframe index -1表示倒数第一个
                 selected_time_idx.append(time_idx)
-                selected_keyframes.append(-1)
+                selected_keyframes.append(-1) #
                 print(f"\nSelected Keyframes at Frame {time_idx}: {selected_time_idx}")# Print the selected keyframes
 
-            # Reset Optimizer & Learning Rates for Full Map Optimization
-            # 执行Mapping的优化前，初始化优化器
+            # 执行Mapping的优化前，初始化优化器Reset Optimizer & Learning Rates for Full Map Optimization
             optimizer = initialize_optimizer(params, config['mapping']['lrs'], tracking=False) 
 
             '''
-                Mapping
+                5.5.3 Mapping
             '''
             mapping_start_time = time.time()
             if num_iters_mapping > 0:
@@ -1076,20 +1073,17 @@ def rgbd_slam(config: dict):
                 # Randomly select a frame until current time step amongst keyframes
                 rand_idx = np.random.randint(0, len(selected_keyframes))
                 selected_rand_keyframe_idx = selected_keyframes[rand_idx]
-                if selected_rand_keyframe_idx == -1:
-                    # Use Current Frame Data
+                if selected_rand_keyframe_idx == -1: #selected_keyframes.append(-1)只有第一帧，就用当前帧
                     iter_time_idx = time_idx
                     iter_color = color
                     iter_depth = depth
-                else:
-                    # Use Keyframe Data
+                else:# Use Keyframe Data
                     iter_time_idx = keyframe_list[selected_rand_keyframe_idx]['id']
                     iter_color = keyframe_list[selected_rand_keyframe_idx]['color']
                     iter_depth = keyframe_list[selected_rand_keyframe_idx]['depth']
                 iter_gt_w2c = gt_w2c_all_frames[:iter_time_idx+1]
                 iter_data = {'cam': cam, 'im': iter_color, 'depth': iter_depth, 'id': iter_time_idx, 
                              'intrinsics': intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': iter_gt_w2c}
-                # Loss for current frame
                 # 重点函数：计算当前帧的损失
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
@@ -1173,7 +1167,7 @@ def rgbd_slam(config: dict):
                 keyframe_list.append(curr_keyframe)
                 keyframe_time_indices.append(time_idx)
         
-        # Checkpoint every iteration
+        # (Ignore) Checkpoint every iteration, MatrixCity没有
         if time_idx % config["checkpoint_interval"] == 0 and config['save_checkpoints']:
             ckpt_output_dir = os.path.join(config["workdir"], config["run_name"])
             save_params_ckpt(params, ckpt_output_dir, time_idx)
