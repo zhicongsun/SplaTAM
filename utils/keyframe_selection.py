@@ -54,8 +54,8 @@ def keyframe_selection_overlap(gt_depth, w2c, intrinsics, keyframe_list, k, pixe
         # Radomly Sample Pixel Indices from valid depth pixels
         width, height = gt_depth.shape[2], gt_depth.shape[1]
         valid_depth_indices = torch.where(gt_depth[0] > 0)
-        valid_depth_indices = torch.stack(valid_depth_indices, dim=1)
-        indices = torch.randint(valid_depth_indices.shape[0], (pixels,))
+        valid_depth_indices = torch.stack(valid_depth_indices, dim=1) #通过这两步得到depth>0的点的坐标tensor，shape[0]对应depth>0的点个数,每一行是对应的坐标
+        indices = torch.randint(valid_depth_indices.shape[0], (pixels,))#在depth>0的点中采样pixels个，每个的index范围在shape[0]内
         sampled_indices = valid_depth_indices[indices]
 
         # Back Project the selected pixels to 3D Pointcloud
