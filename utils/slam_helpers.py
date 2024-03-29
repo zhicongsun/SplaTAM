@@ -122,6 +122,9 @@ def params2rendervar(params):
 
 
 def transformed_params2rendervar(params, transformed_gaussians):
+    """
+    获取要渲染的参数rendervar
+    """
     # Check if Gaussians are Isotropic
     if params['log_scales'].shape[1] == 1:
         log_scales = torch.tile(params['log_scales'], (1, 3))
@@ -252,7 +255,7 @@ def transformed_params2depthplussilhouette(params, w2c, transformed_gaussians):
 def transform_to_frame(params, time_idx, gaussians_grad, camera_grad):
     """
     Function to transform Isotropic or Anisotropic Gaussians from world frame to camera frame.
-    
+    将3DGS的中心从世界坐标系转换到相机坐标系
     Args:
         params: dict of parameters
         time_idx: time index to transform to

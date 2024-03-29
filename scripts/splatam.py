@@ -348,21 +348,39 @@ def initialize_first_timestep(dataset, num_frames, scene_radius_depth_ratio,
 def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_for_loss,
              sil_thres, use_l1, ignore_outlier_depth_loss, tracking=False, 
              mapping=False, do_ba=False, plot_dir=None, visualize_tracking_loss=False, tracking_iteration=None):
+    '''
+    函数目的：在Tracking、Mapping的过程中计算当前帧的loss
+    输入：相机参数 params
+         当前数据 curr_data
+         中间变量 variables
+         迭代的时间索引 iter_time_idx
+         损失权重 loss_weights
+         是否使用深度图用于损失计算 use_sil_for_loss
+         阈值 sil_thres 等等
+    '''
     # Initialize Loss Dictionary
     losses = {}
-
+    '''
+    Step 1:
+    根据输入的参数和当前迭代的时间步，调用 transform_to_frame 函数将世界坐标系中的点转换为相机坐标系中的高斯分布中心点，并考虑是否需要计算梯度。
+    不同的模式（tracking、mapping）会影响对哪些参数计算梯度。
+        tracking的时候camera pose需要计算梯度
+        mapping的时候BA优化,则高斯和pose的梯度都要优化
+        单纯的mapping则只需要优化高斯的梯度
+    '''
     if tracking:
         # Get current frame Gaussians, where only the camera pose gets gradient
         transformed_gaussians = transform_to_frame(params, iter_time_idx, 
                                              gaussians_grad=False,
                                              camera_grad=True)
     elif mapping:
-        if do_ba:
+        # mapping的时候BA优化,则高斯和pose的梯度都要优化
+        if do_ba:# 但do_ba一直是False，不执行
             # Get current frame Gaussians, where both camera pose and Gaussians get gradient
             transformed_gaussians = transform_to_frame(params, iter_time_idx,
                                                  gaussians_grad=True,
                                                  camera_grad=True)
-        else:
+        else:# 单纯的mapping则只需要优化高斯的梯度
             # Get current frame Gaussians, where only the Gaussians get gradient
             transformed_gaussians = transform_to_frame(params, iter_time_idx,
                                                  gaussians_grad=True,
@@ -373,7 +391,13 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
                                              gaussians_grad=True,
                                              camera_grad=False)
 
-    # Initialize Render Variables
+    '''
+    Step 2:
+    Initialize Render Variables
+    将输入的参数 params 转换成一个包含渲染相关变量的字典rendervar与depth_sil_rendervar
+
+    '''
+    # 下面两行代码用于获取渲染rgb渲染量以及深度渲染量
     rendervar = transformed_params2rendervar(params, transformed_gaussians)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
                                                                  transformed_gaussians)
@@ -423,8 +447,8 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     else:
         losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
 
-    # Visualize the Diff Images
-    if tracking and visualize_tracking_loss:
+    # (Ignore) Visualize the Diff Images
+    if tracking and visualize_tracking_loss: # MatrixCity 的visualize_tracking_loss是False
         fig, ax = plt.subplots(2, 4, figsize=(12, 6))
         weighted_render_im = im * color_mask
         weighted_im = curr_data['im'] * color_mask
@@ -590,10 +614,10 @@ def convert_params_to_store(params):#(Ignore)没引用到
 
 
 def rgbd_slam(config: dict):
-    '''
+    """
         SLAM主函数
         输入：splatam.py模块中的config字典
-    '''
+    """
     '''
         1.1 Print Config
     '''
@@ -601,8 +625,9 @@ def rgbd_slam(config: dict):
     if "use_depth_loss_thres" not in config['tracking']:
         # not in则不使用深度误差的阈值来决定tracking是否停止，matrixcity是not in并且直接用迭代最大值来决定是否停止
         config['tracking']['use_depth_loss_thres'] = False
-        config['tracking']['depth_loss_thres'] = 100000
+        config['tracking']['depth_loss_thres'] = 100000 # 该参数在matrixcity中实际没用到
     if "visualize_tracking_loss" not in config['tracking']:
+        # MatrixCity是not in
         config['tracking']['visualize_tracking_loss'] = False
     if "gaussian_distribution" not in config:
         config['gaussian_distribution'] = "isotropic"
@@ -684,10 +709,9 @@ def rgbd_slam(config: dict):
     if num_frames == -1: #一般是-1，除了iphone采集的数据集
         num_frames = len(dataset) #数据集帧总数
     '''
-        3 第一帧初始化，初始化高斯点云
-        直接看else部分
+        3 第一帧,初始化高斯点云
     '''
-    # Init seperate dataloader for densification if required 
+    # (Ignore) Init seperate dataloader for densification if required 
     if seperate_densification_res:
         densify_dataset = get_dataset(
             config_dict=gradslam_data_cfg,
@@ -1238,24 +1262,38 @@ def rgbd_slam(config: dict):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()#创建了一个新的命令行输入解析对象
-
-    parser.add_argument("experiment", type=str, help="Path to experiment file")#添加了一个命令行参数，这个参数名字是 “experiment”，它的类型是字符串，它的帮助信息是 “Path to experiment file”
-
-    args = parser.parse_args()#解析命令行输入，并将结果存储在 args.experiment 中，例：python scripts/splatam.py configs/replica/splatam.py
-
+    '''
+        1 从命令行加载要用来做实验的数据集的配置文件module到experiment变量中
+    '''
+    parser = argparse.ArgumentParser() # 创建了一个新的命令行输入解析对象
+    parser.add_argument("experiment", type=str, help="Path to experiment file") # 添加了一个命令行参数，这个参数名字是 “experiment”，它的类型是字符串，它的帮助信息是 “Path to experiment file”
+    args = parser.parse_args() # 解析命令行输入，并将结果存储在 args.experiment 中，例：python scripts/splatam.py configs/replica/splatam.py
     experiment = SourceFileLoader(
         os.path.basename(args.experiment), args.experiment
-    ).load_module()#加载了一个 Python 模块，这个模块的路径是从命令行输入中获取的
+    ).load_module() # 加载了一个 Python 模块，这个模块的路径是从命令行输入中获取的
 
+    '''
+        2 设置实验因子，确保每次实验结果可复现
+    '''
     # Set Experiment Seed
     seed_everything(seed=experiment.config['seed'])
     
+    '''
+        3 根据experiment模块的配置，设置文件保存路径
+    '''
     # Create Results Directory and Copy Config
     results_dir = os.path.join(
         experiment.config["workdir"], experiment.config["run_name"]
-    )#创建了一个结果目录的路径，这个路径是由工作目录和运行名称拼接而成的，这两个值都是从加载的模块的配置中获取的
-    if not experiment.config['load_checkpoint']:#检查配置中的 ‘load_checkpoint’ 选项。如果这个选项为 False，那么就会创建结果目录，并将配置文件复制到结果目录中
+    ) # 创建了一个结果目录的路径，这个路径是由工作目录和运行名称拼接而成的，这两个值都是从加载的模块的配置中获取的
+
+    '''
+        4 如果没有checkpoint，则根据路径创建文件保存文件夹
+    '''
+    if not experiment.config['load_checkpoint']: # 检查配置中的 ‘load_checkpoint’ 选项。如果这个选项为 False，那么就会创建结果目录，并将配置文件复制到结果目录中
         os.makedirs(results_dir, exist_ok=True)
-        shutil.copy(args.experiment, os.path.join(results_dir, "config.py"))#例如会将configs/replica/splatam.py复制到experiments/replica/room0_0/下，命名为config.py
+        shutil.copy(args.experiment, os.path.join(results_dir, "config.py")) # 例如会将configs/replica/splatam.py复制到experiments/replica/room0_0/下，命名为config.py
+    
+    '''
+        5 开始SLAM,输入experiment的配置字典config
+    '''
     rgbd_slam(experiment.config)
