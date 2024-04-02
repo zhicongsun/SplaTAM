@@ -204,7 +204,7 @@ def initialize_params(init_pt_cld, num_frames, mean3_sq_dist):
         'rgb_colors': init_pt_cld[:, 3:6], # 颜色 
         'unnorm_rotations': unnorm_rots, # 未标准化的旋转矩阵，用于表示3D高斯的旋转。由四元数表示。unnorm_rotations形状为 (num_pts, 4) 的数组。初始化每一行都是[1, 0, 0, 0]，表示没有应用任何旋转。
         'logit_opacities': logit_opacities, # 不透明度，初始化为0
-        'log_scales': torch.tile(torch.log(torch.sqrt(mean3_sq_dist))[..., None], (1, 1)), # 对均方距离开平方得到标准差，然后求对数，增加一个维度，在前两维度都复制一遍
+        'log_scales': torch.tile(torch.log(torch.sqrt(mean3_sq_dist))[..., None], (1, 1)), # 对均方距离开平方得到标准差，然后求对数，增加一个维度，在前两维度都复制一遍（因为初始化是各项同性高斯）
     }
     '''
         A2.高斯参数params初始化：2）相机参数设置：旋转矩阵（未旋转），平移矩阵（未平移），num_frames维度，用于衡量当前点云在不同帧中的旋转平移
@@ -401,32 +401,40 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     rendervar = transformed_params2rendervar(params, transformed_gaussians)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
                                                                  transformed_gaussians)
+    '''
+    Step 3:
+    Rendering RGB, Depth and Silhouette
 
-
-    # RGB Rendering
+    '''
     rendervar['means2D'].retain_grad() #在进行RGB渲染时，保留其梯度信息(means2D)。
-    # 使用渲染器 Renderer 对当前帧进行RGB渲染，得到RGB图像 im、半径信息 radius。
+    # 使用渲染器 Renderer 对当前帧进行RGB渲染，得到RGB图像 im、半径信息 radius。im.shape (3, height,width)
     im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar) #这里的Renderer是import from diff_gaussian_rasterization,也就是高斯光栅化的渲染
     # 将 means2D 的梯度累积到 variables 中，这是为了在颜色渲染过程中进行密集化（densification）。
     variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
 
     # Depth & Silhouette Rendering
-    # 使用渲染器 Renderer 对当前帧进行深度和轮廓渲染，得到深度轮廓图 depth_sil。
+    # 使用渲染器 Renderer 对当前帧进行深度和轮廓渲染，得到深度轮廓图 depth_sil (3, height,width)
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
     # 从深度轮廓图中提取深度信息 depth，轮廓信息 silhouette，以及深度的平方 depth_sq。
-    depth = depth_sil[0, :, :].unsqueeze(0)
-    silhouette = depth_sil[1, :, :]
+    depth = depth_sil[0, :, :].unsqueeze(0) # (1, height,width)
+    silhouette = depth_sil[1, :, :] # (height,width)
     presence_sil_mask = (silhouette > sil_thres)
     depth_sq = depth_sil[2, :, :].unsqueeze(0)
     # 计算深度的不确定性，即深度平方的差值，然后将其分离出来并进行 detach 操作(不计算梯度)。
     uncertainty = depth_sq - depth**2
     uncertainty = uncertainty.detach()
 
+    '''
+    Step 4: 生成mask，用来选择需要计算loss的点
+    nan_mask考虑深度和不确定度的有效性
+    depth_error考虑误差异常
+    presence_sil_mask考虑在tracking计算loss的时候使用轮廓图的存在性
+    '''
 
     # Mask with valid depth values (accounts for outlier depth values)
     # 建一个 nan_mask，用于标记深度和不确定性的有效值，避免处理异常值。
     nan_mask = (~torch.isnan(depth)) & (~torch.isnan(uncertainty))
-    if ignore_outlier_depth_loss: #如果开启了 ignore_outlier_depth_loss，则基于深度误差生成一个新的掩码 mask，并且该掩码会剔除深度值异常的区域。
+    if ignore_outlier_depth_loss: # （Ignore, Matrixcity为false）如果开启了 ignore_outlier_depth_loss，则基于深度误差生成一个新的掩码 mask，并且该掩码会剔除深度值异常的区域。
         depth_error = torch.abs(curr_data['depth'] - depth) * (curr_data['depth'] > 0)
         mask = (depth_error < 10*depth_error.median())
         mask = mask & (curr_data['depth'] > 0)
@@ -435,34 +443,26 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     mask = mask & nan_mask
     # Mask with presence silhouette mask (accounts for empty space)
     # 如果在跟踪模式下且开启了使用轮廓图进行损失计算 (use_sil_for_loss)，则将 mask 与轮廓图的存在性掩码 presence_sil_mask 相与。
-    if tracking and use_sil_for_loss:
+    if tracking and use_sil_for_loss: # Matrixcity的use_sil_for_loss为true
         mask = mask & presence_sil_mask
 
-    # 至此,生成RGB图像、深度图、并根据需要进行掩码处理，以便后续在计算损失时使用。
-        
+    '''
+    至此,生成RGB图像、深度图、并根据需要进行掩码处理，以便后续在计算损失时使用
+    Step 5：计算depth and RGB loss
+    '''
 
-    # Depth loss
-    if use_l1:
+    # Depth loss(计算深度的loss)
+    if use_l1: #如果使用L1损失 (use_l1)，则将 mask 进行 detach 操作，即不计算其梯度。
         mask = mask.detach()
-        if tracking:
+        if tracking: #如果在跟踪模式下 (tracking)，计算深度损失 (losses['depth']) 为当前深度图与渲染深度图之间差值的绝对值之和（只考虑掩码内的区域）。
             losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].sum()
-        else:
+        else: #如果不在跟踪模式下，计算深度损失为当前深度图与渲染深度图之间差值的绝对值的平均值（只考虑掩码内的区域）。上下一模一样
             losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].mean()
-    
-    # RGB Loss
-    if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
-        color_mask = torch.tile(mask, (3, 1, 1))
-        color_mask = color_mask.detach()
-        losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
-    elif tracking:
-        losses['im'] = torch.abs(curr_data['im'] - im).sum()
-    else:
-        losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
-    
+
     # RGB Loss(计算RGB的loss)
     # 如果在跟踪模式下 (tracking) 并且使用轮廓图进行损失计算 (use_sil_for_loss) 或者忽略异常深度值 (ignore_outlier_depth_loss)，计算RGB损失 (losses['im']) 为当前图像与渲染图像之间差值的绝对值之和（只考虑掩码内的区域）。
-    if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
-        color_mask = torch.tile(mask, (3, 1, 1))
+    if tracking and (use_sil_for_loss or ignore_outlier_depth_loss): # Matrixcity的use_sil_for_loss为true
+        color_mask = torch.tile(mask, (3, 1, 1)) # 形状与 mask 相同，维度为 (3, H, W)。它的值是通过将 mask 沿着通道维度重复 3 次而得到的。这通常用于将二进制掩码转换为彩色掩码，以便在图像上显示不同的区域
         color_mask = color_mask.detach()
         losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
     elif tracking: #如果在跟踪模式下，但没有使用轮廓图进行损失计算，计算RGB损失为当前图像与渲染图像之间差值的绝对值之和。
@@ -516,14 +516,19 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
         # os.makedirs(save_plot_dir, exist_ok=True)
         # plt.savefig(os.path.join(save_plot_dir, f"%04d.png" % tracking_iteration), bbox_inches='tight')
         # plt.close()
+    
+    # 下面代码进行了损失的加权和最终的损失值计算
+    # 对每个损失项按照其权重进行加权，得到 weighted_losses 字典，其中 k 是损失项的名称，v 是对应的损失值，loss_weights 是各个损失项的权重。
+    weighted_losses = {k: v * loss_weights[k] for k, v in losses.items()} # loss_weights是输入的权重
+    print('weighted_loss', weighted_losses)
+    # 最终损失值 loss 是加权损失项的和。
+    loss = sum(weighted_losses.values()) 
+    print('loss',loss)
 
-    weighted_losses = {k: v * loss_weights[k] for k, v in losses.items()}
-    loss = sum(weighted_losses.values())
-
-    seen = radius > 0
-    variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
-    variables['seen'] = seen
-    weighted_losses['loss'] = loss
+    seen = radius > 0 #创建一个布尔掩码 seen，其中对应的位置为 True 表示在当前迭代中观察到了某个点。
+    variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen]) #更新 variables['max_2D_radius'] 中已观察到的点的最大半径。
+    variables['seen'] = seen #将 seen 存储在 variables 字典中。
+    weighted_losses['loss'] = loss #最终，将总损失值存储在 weighted_losses 字典中的 'loss' 键下。
 
     return loss, variables, weighted_losses
 
@@ -556,49 +561,86 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution):
     return params
 
 
-def add_new_gaussians(params, variables, curr_data, sil_thres, 
-                      time_idx, mean_sq_dist_method, gaussian_distribution):
-    # Silhouette Rendering
-    transformed_gaussians = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)
+def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method):
+    '''
+    函数目的：在建图过程中根据当前帧的数据进行高斯分布的密集化
+    '''
+    '''
+    Step1: 根据论文的公式9确定哪些像素需要增加高斯non_presence_mask
+    '''
+    # Silhouette Rendering（轮廓渲染）
+    transformed_pts = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)#将高斯模型转换到frame坐标系下（返回的transformed_pts就是在相机坐标系下的高斯中心点）
+    # 注意，此处的params（如下定义，实际上就是高斯函数，同时也包含pose等）
+    # params = {
+    #     'means3D': means3D,
+    #     'rgb_colors': init_pt_cld[:, 3:6],
+    #     'unnorm_rotations': unnorm_rots,
+    #     'logit_opacities': logit_opacities,
+    #     'log_scales': torch.tile(torch.log(torch.sqrt(mean3_sq_dist))[..., None], (1, 1)),
+    # }
+
+    #获取深度的渲染变量（#所谓的深度轮廓其实就是相机坐标系下的（深度值，1，深度的平方））
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
-                                                                 transformed_gaussians)
+                                                                 transformed_pts) 
+    
+    # 通过渲染器 Renderer 得到深度图和轮廓图，其中 depth_sil 包含了深度信息和轮廓信息。
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
     silhouette = depth_sil[1, :, :]
-    non_presence_sil_mask = (silhouette < sil_thres)
+    # non_presence_sil_mask代表当前帧中未出现的区域？
+    non_presence_sil_mask = (silhouette < sil_thres) #通过设置阈值 sil_thres（输入参数为0.5），创建一个轮廓图的非存在掩码 # 对应paper的公式9
+
     # Check for new foreground objects by using GT depth
-    gt_depth = curr_data['depth'][0, :, :]
-    render_depth = depth_sil[0, :, :]
-    depth_error = torch.abs(gt_depth - render_depth) * (gt_depth > 0)
-    non_presence_depth_mask = (render_depth > gt_depth) * (depth_error > 50*depth_error.median())
+    # 利用当前深度图和渲染后的深度图，通过 depth_error 计算深度误差，并生成深度非存在掩码 non_presence_depth_mask。
+    gt_depth = curr_data['depth'][0, :, :] #获取真值的深度图
+    render_depth = depth_sil[0, :, :] #获取渲染的深度图
+    depth_error = torch.abs(gt_depth - render_depth) * (gt_depth > 0) #计算深度误差
+    non_presence_depth_mask = (render_depth > gt_depth) * (depth_error > 50*depth_error.median()) # 对应paper的公式9
+
     # Determine non-presence mask
+    # 将轮廓图非存在掩码和深度非存在掩码合并生成整体的非存在掩码 non_presence_mask。
     non_presence_mask = non_presence_sil_mask | non_presence_depth_mask
     # Flatten mask
     non_presence_mask = non_presence_mask.reshape(-1)
 
     # Get the new frame Gaussians based on the Silhouette
+    # 检测到非存在掩码中有未出现的点时，根据当前帧的数据生成新的高斯分布参数，并将这些参数添加到原有的高斯分布参数中
     if torch.sum(non_presence_mask) > 0:
         # Get the new pointcloud in the world frame
-        curr_cam_rot = torch.nn.functional.normalize(params['cam_unnorm_rots'][..., time_idx].detach())
-        curr_cam_tran = params['cam_trans'][..., time_idx].detach()
-        curr_w2c = torch.eye(4).cuda().float()
+        # 获取当前相机的旋转和平移信息:
+        curr_cam_rot = torch.nn.functional.normalize(params['cam_unnorm_rots'][..., time_idx].detach()) #获取当前帧的相机未归一化旋转信息。
+        curr_cam_tran = params['cam_trans'][..., time_idx].detach() #对旋转信息进行归一化。
+        # 构建当前帧相机到世界坐标系的变换矩阵:
+        curr_w2c = torch.eye(4).cuda().float() #创建一个单位矩阵
+        # 利用归一化后的旋转信息和当前帧的相机平移信息，更新变换矩阵的旋转和平移部分。
         curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
         curr_w2c[:3, 3] = curr_cam_tran
-        valid_depth_mask = (curr_data['depth'][0, :, :] > 0)
-        non_presence_mask = non_presence_mask & valid_depth_mask.reshape(-1)
+        # 生成有效深度掩码:
+        valid_depth_mask = (curr_data['depth'][0, :, :] > 0) #生成当前帧的有效深度掩码 valid_depth_mask。
+        # 更新非存在掩码:
+        non_presence_mask = non_presence_mask & valid_depth_mask.reshape(-1) #将 non_presence_mask 和 valid_depth_mask 进行逐元素与操作，得到更新后的非存在掩码。
+        # 获取新的点云和平均平方距离:
+        #利用 get_pointcloud 函数，传入当前帧的图像、深度图、内参、变换矩阵和非存在掩码，生成新的点云 new_pt_cld。同时计算这些新点云到已存在高斯分布的平均平方距离 mean3_sq_dist。
         new_pt_cld, mean3_sq_dist = get_pointcloud(curr_data['im'], curr_data['depth'], curr_data['intrinsics'], 
                                     curr_w2c, mask=non_presence_mask, compute_mean_sq_dist=True,
-                                    mean_sq_dist_method=mean_sq_dist_method)
-        new_params = initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution)
-        for k, v in new_params.items():
+                                    mean_sq_dist_method=mean_sq_dist_method) #参数文件中定义mean_sq_dist_method为projective
+        # 初始化新的高斯分布参数:
+        # 利用新的点云和平均平方距离，调用 initialize_new_params 函数生成新的高斯分布参数 new_params。
+        new_params = initialize_new_params(new_pt_cld, mean3_sq_dist)
+        # 将新的高斯分布参数添加到原有参数中:
+        for k, v in new_params.items(): #对于每个键值对 (k, v)，其中 k 是高斯分布参数的键，v 是对应的值，在 params 中将其与新参数 v 拼接，并转换为可梯度的 torch.nn.Parameter 对象。
             params[k] = torch.nn.Parameter(torch.cat((params[k], v), dim=0).requires_grad_(True))
+        # (更新相关的统计信息)初始化一些统计信息，如梯度累积、分母、最大2D半径等。
         num_pts = params['means3D'].shape[0]
         variables['means2D_gradient_accum'] = torch.zeros(num_pts, device="cuda").float()
         variables['denom'] = torch.zeros(num_pts, device="cuda").float()
         variables['max_2D_radius'] = torch.zeros(num_pts, device="cuda").float()
+        # (更新时间步信息)将新的点云对应的时间步信息 new_timestep（都是当前帧的时间步）拼接到原有的时间步信息中。
         new_timestep = time_idx*torch.ones(new_pt_cld.shape[0],device="cuda").float()
         variables['timestep'] = torch.cat((variables['timestep'],new_timestep),dim=0)
 
+    # 将更新后的模型参数 params 和相关的统计信息 variables 返回。
     return params, variables
+
 
 
 def initialize_camera_pose(params, curr_time_idx, forward_prop):
@@ -1120,7 +1162,7 @@ def rgbd_slam(config: dict):
                 # Randomly select a frame until current time step amongst keyframes
                 rand_idx = np.random.randint(0, len(selected_keyframes))
                 selected_rand_keyframe_idx = selected_keyframes[rand_idx]
-                if selected_rand_keyframe_idx == -1: #selected_keyframes.append(-1)只有第一帧，就用当前帧
+                if selected_rand_keyframe_idx == -1: # selected_keyframes.append(-1)只有第一帧，就用当前帧
                     iter_time_idx = time_idx
                     iter_color = color
                     iter_depth = depth
@@ -1135,22 +1177,18 @@ def rgbd_slam(config: dict):
                 loss, variables, losses = get_loss(params, iter_data, variables, iter_time_idx, config['mapping']['loss_weights'],
                                                 config['mapping']['use_sil_for_loss'], config['mapping']['sil_thres'],
                                                 config['mapping']['use_l1'], config['mapping']['ignore_outlier_depth_loss'], mapping=True)
-                if config['use_wandb']:
-                    # Report Loss
+                if config['use_wandb']: # Report Loss
                     wandb_mapping_step = report_loss(losses, wandb_run, wandb_mapping_step, mapping=True)
-                # Backprop
-                loss.backward()
+                loss.backward() # Backprop
                 with torch.no_grad():
                     # Prune Gaussians
-                    # 以configs/replica/splatam.py为例，config['mapping']['prune_gaussians']=True，执行
-                    if config['mapping']['prune_gaussians']:
+                    if config['mapping']['prune_gaussians']: # replica和Matrixcity都是True，执行
                         params, variables = prune_gaussians(params, variables, optimizer, iter, config['mapping']['pruning_dict'])
                         if config['use_wandb']:
                             wandb_run.log({"Mapping/Number of Gaussians - Pruning": params['means3D'].shape[0],
                                            "Mapping/step": wandb_mapping_step})
                     # Gaussian-Splatting's Gradient-based Densification
-                    # 以configs/replica/splatam.py为例，config['mapping']['use_gaussian_splatting_densification']=False，不执行
-                    if config['mapping']['use_gaussian_splatting_densification']:
+                    if config['mapping']['use_gaussian_splatting_densification']: # replica和Matrixcity都是False，不执行
                         params, variables = densify(params, variables, optimizer, iter, config['mapping']['densify_dict'])
                         if config['use_wandb']:
                             wandb_run.log({"Mapping/Number of Gaussians - Densification": params['means3D'].shape[0],

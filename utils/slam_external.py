@@ -165,27 +165,55 @@ def inverse_sigmoid(x):
 
 
 def prune_gaussians(params, variables, optimizer, iter, prune_dict):
-    if iter <= prune_dict['stop_after']:
-        if (iter >= prune_dict['start_after']) and (iter % prune_dict['prune_every'] == 0):
-            if iter == prune_dict['stop_after']:
+    '''
+    函数：对高斯分布进行修剪的操作
+    目的：通过移除不透明度低的高斯分布和根据条件移除过大的高斯分布，实现对高斯分布的动态修剪
+    0.1 * variables['scene_radius']这里的0.1是超参数
+    '''
+    if iter <= prune_dict['stop_after']: #确保当前迭代次数小于等于设定的停止迭代次数
+        if (iter >= prune_dict['start_after']) and (iter % prune_dict['prune_every'] == 0): # 检查是否达到修剪的启动条件，即当前迭代次数大于等于设定的开始修剪的迭代次数，并且迭代次数是修剪的周期的倍数
+            '''
+            Step1: 确定要移除的两类高斯
+            1. 透明度低于阈值
+            2. 尺度大于阈值
+            '''
+            
+            # 根据当前迭代次数设置移除高斯分布的不透明度的阈值
+            if iter == prune_dict['stop_after']: # 如果当前迭代是停止迭代的迭代次数
                 remove_threshold = prune_dict['final_removal_opacity_threshold']
             else:
                 remove_threshold = prune_dict['removal_opacity_threshold']
-            # Remove Gaussians with low opacity
+            
+            # 移除低不透明度的高斯分布：
+            # 使用 torch.sigmoid(params['logit_opacities']) < remove_threshold 来找到不透明度低于阈值的高斯分布。
             to_remove = (torch.sigmoid(params['logit_opacities']) < remove_threshold).squeeze()
-            # Remove Gaussians that are too big
+
+            # 移除尺度过大的高斯分布
+            # 如果当前迭代次数大于等于 prune_dict['remove_big_after']，同时检查高斯分布的尺度是否太大，如果是，则标记为要移除。
             if iter >= prune_dict['remove_big_after']:
                 big_points_ws = torch.exp(params['log_scales']).max(dim=1).values > 0.1 * variables['scene_radius']
-                to_remove = torch.logical_or(to_remove, big_points_ws)
+                to_remove = torch.logical_or(to_remove, big_points_ws) #逻辑或，合并
+            
+            '''
+            Step2: 移除高斯
+            '''
+            # 调用 remove_points 函数，将标记为要移除的高斯分布从参数和变量中删除，并通过 optimizer 更新模型参数。
             params, variables = remove_points(to_remove, params, variables, optimizer)
+
+            # 最后，通过 torch.cuda.empty_cache() 释放 GPU 缓存。
             torch.cuda.empty_cache()
         
-        # Reset Opacities for all Gaussians
-        if iter > 0 and iter % prune_dict['reset_opacities_every'] == 0 and prune_dict['reset_opacities']:
+        ''''
+        Step3: 重置所有高斯分布的不透明度 Reset Opacities for all Gaussians
+        '''
+        if iter > 0 and iter % prune_dict['reset_opacities_every'] == 0 and prune_dict['reset_opacities']: #如果当前迭代次数大于0，并且是 prune_dict['reset_opacities_every'] 的倍数，并且设置了重置的标志 prune_dict['reset_opacities'] 为True，
+            # 创建一个新的参数字典 new_params，其中所有高斯分布的不透明度被重置为一个小的值（0.01）。
             new_params = {'logit_opacities': inverse_sigmoid(torch.ones_like(params['logit_opacities']) * 0.01)}
+            # 调用 update_params_and_optimizer 函数，更新模型参数和优化器。
             params = update_params_and_optimizer(new_params, params, optimizer)
     
-    return params, variables
+    return params, variables #返回更新后的参数和变量
+
 
 
 def densify(params, variables, optimizer, iter, densify_dict):

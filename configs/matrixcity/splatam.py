@@ -62,14 +62,14 @@ config = dict(
         use_gt_poses=False, # Use GT Poses for Tracking
         forward_prop=True, # Forward Propagate Poses
         num_iters=tracking_iters,
-        use_sil_for_loss=True,
-        sil_thres=0.99,
+        use_sil_for_loss=True,#是否使用轮廓图的存在性生成mask
+        sil_thres=0.99,#判断轮廓图存在性的阈值
         use_l1=True,
-        ignore_outlier_depth_loss=False,
+        ignore_outlier_depth_loss=False,#生成mask的时候是否忽略异常深度的点
         loss_weights=dict(
             im=0.5,
             depth=1.0,
-        ),
+        ),# loss的权重
         lrs=dict(
             means3D=0.0,
             rgb_colors=0.0,
@@ -91,7 +91,7 @@ config = dict(
         loss_weights=dict(
             im=0.5,
             depth=1.0,
-        ),
+        ), # loss的权重
         lrs=dict(
             means3D=0.0001,
             rgb_colors=0.0025,
@@ -103,16 +103,16 @@ config = dict(
         ),
         prune_gaussians=True, # Prune Gaussians during Mapping
         pruning_dict=dict( # Needs to be updated based on the number of mapping iterations
-            start_after=0,
-            remove_big_after=0,
-            stop_after=20,
-            prune_every=20,
+            start_after=0, #开始修剪的迭代次数
+            remove_big_after=0, #开始检查高斯分布的尺度是否太大的迭代次数
+            stop_after=20, #停止迭代次数
+            prune_every=20,#修剪的周期
             densify_every=100,
             grad_thresh=0.0002,
             num_to_split_into=2,
-            removal_opacity_threshold=0.005,
-            final_removal_opacity_threshold=0.005,
-            reset_opacities_every=3000, # Doesn't consider iter 0
+            removal_opacity_threshold=0.005, #高斯不透明度的阈值
+            final_removal_opacity_threshold=0.005, #最后一次迭代高斯不透明度的阈值
+            reset_opacities_every=3000, # Doesn't consider iter 0 重置所有高斯不透明度的迭代次数
         ),
     ),
     viz=dict(
