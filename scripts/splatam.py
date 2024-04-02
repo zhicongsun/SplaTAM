@@ -402,32 +402,44 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'],
                                                                  transformed_gaussians)
 
+
     # RGB Rendering
-    rendervar['means2D'].retain_grad()
-    im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+    rendervar['means2D'].retain_grad() #在进行RGB渲染时，保留其梯度信息(means2D)。
+    # 使用渲染器 Renderer 对当前帧进行RGB渲染，得到RGB图像 im、半径信息 radius。
+    im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar) #这里的Renderer是import from diff_gaussian_rasterization,也就是高斯光栅化的渲染
+    # 将 means2D 的梯度累积到 variables 中，这是为了在颜色渲染过程中进行密集化（densification）。
     variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
 
     # Depth & Silhouette Rendering
+    # 使用渲染器 Renderer 对当前帧进行深度和轮廓渲染，得到深度轮廓图 depth_sil。
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
+    # 从深度轮廓图中提取深度信息 depth，轮廓信息 silhouette，以及深度的平方 depth_sq。
     depth = depth_sil[0, :, :].unsqueeze(0)
     silhouette = depth_sil[1, :, :]
     presence_sil_mask = (silhouette > sil_thres)
     depth_sq = depth_sil[2, :, :].unsqueeze(0)
+    # 计算深度的不确定性，即深度平方的差值，然后将其分离出来并进行 detach 操作(不计算梯度)。
     uncertainty = depth_sq - depth**2
     uncertainty = uncertainty.detach()
 
+
     # Mask with valid depth values (accounts for outlier depth values)
+    # 建一个 nan_mask，用于标记深度和不确定性的有效值，避免处理异常值。
     nan_mask = (~torch.isnan(depth)) & (~torch.isnan(uncertainty))
-    if ignore_outlier_depth_loss:
+    if ignore_outlier_depth_loss: #如果开启了 ignore_outlier_depth_loss，则基于深度误差生成一个新的掩码 mask，并且该掩码会剔除深度值异常的区域。
         depth_error = torch.abs(curr_data['depth'] - depth) * (curr_data['depth'] > 0)
         mask = (depth_error < 10*depth_error.median())
         mask = mask & (curr_data['depth'] > 0)
-    else:
+    else: #如果没有开启 ignore_outlier_depth_loss，则直接使用深度大于零的区域作为 mask。
         mask = (curr_data['depth'] > 0)
     mask = mask & nan_mask
     # Mask with presence silhouette mask (accounts for empty space)
+    # 如果在跟踪模式下且开启了使用轮廓图进行损失计算 (use_sil_for_loss)，则将 mask 与轮廓图的存在性掩码 presence_sil_mask 相与。
     if tracking and use_sil_for_loss:
         mask = mask & presence_sil_mask
+
+    # 至此,生成RGB图像、深度图、并根据需要进行掩码处理，以便后续在计算损失时使用。
+        
 
     # Depth loss
     if use_l1:
@@ -445,6 +457,17 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     elif tracking:
         losses['im'] = torch.abs(curr_data['im'] - im).sum()
     else:
+        losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
+    
+    # RGB Loss(计算RGB的loss)
+    # 如果在跟踪模式下 (tracking) 并且使用轮廓图进行损失计算 (use_sil_for_loss) 或者忽略异常深度值 (ignore_outlier_depth_loss)，计算RGB损失 (losses['im']) 为当前图像与渲染图像之间差值的绝对值之和（只考虑掩码内的区域）。
+    if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
+        color_mask = torch.tile(mask, (3, 1, 1))
+        color_mask = color_mask.detach()
+        losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
+    elif tracking: #如果在跟踪模式下，但没有使用轮廓图进行损失计算，计算RGB损失为当前图像与渲染图像之间差值的绝对值之和。
+        losses['im'] = torch.abs(curr_data['im'] - im).sum()
+    else: #如果不在跟踪模式下，计算RGB损失为L1损失和结构相似性损失的加权和，其中 l1_loss_v1 是L1损失的计算函数，calc_ssim 是结构相似性损失的计算函数。
         losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
 
     # (Ignore) Visualize the Diff Images

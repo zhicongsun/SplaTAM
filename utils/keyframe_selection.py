@@ -48,7 +48,7 @@ def get_pointcloud(depth, intrinsics, w2c, sampled_indices):
         dim=0, return_inverse=True, return_counts=True)
     #_是所有的不同三维点
     #idx表明torch.cat([A, B]每个点对应_中的哪个
-    print('idx',idx)
+    # print('idx',idx)
     # print('counts',counts.shape)
     # print('torch.where(counts.gt(1))',torch.where(counts.gt(1)))
     # print('counts.gt',torch.where(counts.gt(1))[0])
