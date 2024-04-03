@@ -23,9 +23,6 @@ from math import exp
 
 
 def build_rotation(q):
-    '''
-    从四元数（quaternion）构建一个 3x3 的旋转矩阵
-    '''
     norm = torch.sqrt(q[:, 0] * q[:, 0] + q[:, 1] * q[:, 1] + q[:, 2] * q[:, 2] + q[:, 3] * q[:, 3])
     q = q / norm[:, None]
     rot = torch.zeros((q.size(0), 3, 3), device='cuda')

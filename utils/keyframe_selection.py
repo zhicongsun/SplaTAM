@@ -43,6 +43,7 @@ def get_pointcloud(depth, intrinsics, w2c, sampled_indices):
     # print('A:',A)
     B = torch.zeros((1, 3)).cuda().float()
     # print('B',B)
+    print(' torch.cat([A, B], dim=0)', torch.cat([A, B], dim=0))
     _, idx, counts = torch.cat([A, B], dim=0).unique(
         dim=0, return_inverse=True, return_counts=True)
     #_是所有的不同三维点
