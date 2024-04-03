@@ -4,7 +4,7 @@ from os.path import join as p_join
 scenes = ["smallaerial"] 
 
 primary_device="cuda:0"
-seed = 1
+seed = 2
 scene_name = scenes[0]
 
 
