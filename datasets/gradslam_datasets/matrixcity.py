@@ -30,7 +30,7 @@ class MatrixCityDataset(GradSLAMDataset):
         **kwargs,
     ):
         self.input_folder = os.path.join(basedir, sequence)
-        self.pose_path = os.path.join(self.input_folder, "transforms.json") #外参
+        self.pose_path = os.path.join(self.input_folder, "transforms_10.json") #外参
         super().__init__(
             config_dict,
             stride=stride,
@@ -45,8 +45,8 @@ class MatrixCityDataset(GradSLAMDataset):
         )
 
     def get_filepaths(self):
-        color_paths = natsorted(glob.glob(f"{self.input_folder}/block1/*.png")) #rgb
-        depth_paths = natsorted(glob.glob(f"{self.input_folder}/block1/*.exr")) #d
+        color_paths = natsorted(glob.glob(f"{self.input_folder}/block1_10/*.png")) #rgb
+        depth_paths = natsorted(glob.glob(f"{self.input_folder}/block1_10/*.exr")) #d
         embedding_paths = None
         if self.load_embeddings:#embedding没用到
             embedding_paths = natsorted(glob.glob(f"{self.input_folder}/{self.embedding_dir}/*.pt"))
@@ -59,7 +59,6 @@ class MatrixCityDataset(GradSLAMDataset):
         for frame in tj['frames']:
             c2w = np.array(frame['rot_mat']).reshape(4, 4)
             c2w[:3,:3] *= 100 #注意这个处理
-            c2w[:3,3] /= 100
             c2w = torch.from_numpy(c2w).float()
             poses.append(c2w)
         return poses
