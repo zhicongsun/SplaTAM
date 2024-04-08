@@ -128,10 +128,10 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     if transform_pts: #将每个像素点从像素坐标系转化到世界坐标系
         pix_ones = torch.ones(height * width, 1).cuda().float() # shape为(height * width, 1)
         pts4 = torch.cat((pts_cam, pix_ones), dim=1) # shape为(height * width, 4)最后一列都是1，例如
-        # [0 0 z1 1] 
+        # [0 0 z1 1]
         # [1 0 z2 1]
         # [2 0 z3 1]
-        # [0 1 z4 1] 
+        # [0 1 z4 1]
         # [1 1 z5 1]
         # [2 1 z6 1]
         c2w = torch.inverse(w2c) 
@@ -166,7 +166,7 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     cols = torch.permute(color, (1, 2, 0)).reshape(-1, 3) # (C, H, W) -> (H, W, C) -> (H * W, C)
     point_cld = torch.cat((pts, cols), -1) #四列，前三列xyz最后一列color
     '''
-        F.掩码
+        F.掩码，用于增加新的高斯时候用
     '''
     # Optional: Select points based on mask
     if mask is not None:
@@ -179,7 +179,9 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
     else:
         return point_cld
 
-"""
+
+def initialize_params(init_pt_cld, num_frames, mean3_sq_dist):
+    """
     函数目的：初始化高斯参数和变量
     高斯参数：
         1）输入点云的位置，颜色，旋转矩阵，不透明度，大小 
@@ -189,8 +191,7 @@ def get_pointcloud(color, depth, intrinsics, w2c, transform_pts=True,
         2）means2D_gradient_accum：所有高斯点的二维累计梯度
         3）denom：未知
         4）timestep：当前时间
-"""
-def initialize_params(init_pt_cld, num_frames, mean3_sq_dist):
+    """
     '''
         A1.高斯参数params初始化：1）输入点云的位置，颜色，旋转矩阵（未旋转），不透明度（0），大小
     '''
@@ -520,10 +521,8 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     # 下面代码进行了损失的加权和最终的损失值计算
     # 对每个损失项按照其权重进行加权，得到 weighted_losses 字典，其中 k 是损失项的名称，v 是对应的损失值，loss_weights 是各个损失项的权重。
     weighted_losses = {k: v * loss_weights[k] for k, v in losses.items()} # loss_weights是输入的权重
-    print('weighted_loss', weighted_losses)
     # 最终损失值 loss 是加权损失项的和。
     loss = sum(weighted_losses.values()) 
-    print('loss',loss)
 
     seen = radius > 0 #创建一个布尔掩码 seen，其中对应的位置为 True 表示在当前迭代中观察到了某个点。
     variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen]) #更新 variables['max_2D_radius'] 中已观察到的点的最大半径。
@@ -561,14 +560,14 @@ def initialize_new_params(new_pt_cld, mean3_sq_dist, gaussian_distribution):
     return params
 
 
-def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method):
+def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq_dist_method, gaussian_distribution):
     '''
+    注意：相比于源代码，多加了一个参数gaussian_distribution
     函数目的：在建图过程中根据当前帧的数据进行高斯分布的密集化
     '''
     '''
-    Step1: 根据论文的公式9确定哪些像素需要增加高斯non_presence_mask
+    Step1： 渲染轮廓图silhouette和深度图render_depth
     '''
-    # Silhouette Rendering（轮廓渲染）
     transformed_pts = transform_to_frame(params, time_idx, gaussians_grad=False, camera_grad=False)#将高斯模型转换到frame坐标系下（返回的transformed_pts就是在相机坐标系下的高斯中心点）
     # 注意，此处的params（如下定义，实际上就是高斯函数，同时也包含pose等）
     # params = {
@@ -585,39 +584,46 @@ def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq
     
     # 通过渲染器 Renderer 得到深度图和轮廓图，其中 depth_sil 包含了深度信息和轮廓信息。
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
-    silhouette = depth_sil[1, :, :]
+    silhouette = depth_sil[1, :, :] #获取渲染的轮廓图
+    render_depth = depth_sil[0, :, :] #获取渲染的深度图
+    '''
+    Step2: 根据论文的公式9，确定哪些像素需要增加高斯，确定非存在掩码non_presence_mask
+    '''
     # non_presence_sil_mask代表当前帧中未出现的区域？
     non_presence_sil_mask = (silhouette < sil_thres) #通过设置阈值 sil_thres（输入参数为0.5），创建一个轮廓图的非存在掩码 # 对应paper的公式9
 
     # Check for new foreground objects by using GT depth
     # 利用当前深度图和渲染后的深度图，通过 depth_error 计算深度误差，并生成深度非存在掩码 non_presence_depth_mask。
     gt_depth = curr_data['depth'][0, :, :] #获取真值的深度图
-    render_depth = depth_sil[0, :, :] #获取渲染的深度图
     depth_error = torch.abs(gt_depth - render_depth) * (gt_depth > 0) #计算深度误差
     non_presence_depth_mask = (render_depth > gt_depth) * (depth_error > 50*depth_error.median()) # 对应paper的公式9
 
-    # Determine non-presence mask
     # 将轮廓图非存在掩码和深度非存在掩码合并生成整体的非存在掩码 non_presence_mask。
     non_presence_mask = non_presence_sil_mask | non_presence_depth_mask
     # Flatten mask
     non_presence_mask = non_presence_mask.reshape(-1)
 
-    # Get the new frame Gaussians based on the Silhouette
     # 检测到非存在掩码中有未出现的点时，根据当前帧的数据生成新的高斯分布参数，并将这些参数添加到原有的高斯分布参数中
     if torch.sum(non_presence_mask) > 0:
         # Get the new pointcloud in the world frame
         # 获取当前相机的旋转和平移信息:
-        curr_cam_rot = torch.nn.functional.normalize(params['cam_unnorm_rots'][..., time_idx].detach()) #获取当前帧的相机未归一化旋转信息。
-        curr_cam_tran = params['cam_trans'][..., time_idx].detach() #对旋转信息进行归一化。
+        curr_cam_rot = torch.nn.functional.normalize(params['cam_unnorm_rots'][..., time_idx].detach()) #获取当前帧的相机未归一化旋转信息，对旋转信息进行归一化
+        curr_cam_tran = params['cam_trans'][..., time_idx].detach() 
         # 构建当前帧相机到世界坐标系的变换矩阵:
         curr_w2c = torch.eye(4).cuda().float() #创建一个单位矩阵
         # 利用归一化后的旋转信息和当前帧的相机平移信息，更新变换矩阵的旋转和平移部分。
         curr_w2c[:3, :3] = build_rotation(curr_cam_rot)
         curr_w2c[:3, 3] = curr_cam_tran
+        '''
+        Step3: 生成有效深度掩码，和非存在掩码相与，更新非存在掩码
+        '''
         # 生成有效深度掩码:
         valid_depth_mask = (curr_data['depth'][0, :, :] > 0) #生成当前帧的有效深度掩码 valid_depth_mask。
         # 更新非存在掩码:
         non_presence_mask = non_presence_mask & valid_depth_mask.reshape(-1) #将 non_presence_mask 和 valid_depth_mask 进行逐元素与操作，得到更新后的非存在掩码。
+        '''
+        Step4: 在非存在掩码的位置生成新的高斯分布，初始化参数
+        '''
         # 获取新的点云和平均平方距离:
         #利用 get_pointcloud 函数，传入当前帧的图像、深度图、内参、变换矩阵和非存在掩码，生成新的点云 new_pt_cld。同时计算这些新点云到已存在高斯分布的平均平方距离 mean3_sq_dist。
         new_pt_cld, mean3_sq_dist = get_pointcloud(curr_data['im'], curr_data['depth'], curr_data['intrinsics'], 
@@ -625,7 +631,11 @@ def add_new_gaussians(params, variables, curr_data, sil_thres, time_idx, mean_sq
                                     mean_sq_dist_method=mean_sq_dist_method) #参数文件中定义mean_sq_dist_method为projective
         # 初始化新的高斯分布参数:
         # 利用新的点云和平均平方距离，调用 initialize_new_params 函数生成新的高斯分布参数 new_params。
-        new_params = initialize_new_params(new_pt_cld, mean3_sq_dist)
+        new_params = initialize_new_params(new_pt_cld, mean3_sq_dist,gaussian_distribution)
+        
+        '''
+        Step5: 更新模型参数params和统计信息variables
+        '''
         # 将新的高斯分布参数添加到原有参数中:
         for k, v in new_params.items(): #对于每个键值对 (k, v)，其中 k 是高斯分布参数的键，v 是对应的值，在 params 中将其与新参数 v 拼接，并转换为可梯度的 torch.nn.Parameter 对象。
             params[k] = torch.nn.Parameter(torch.cat((params[k], v), dim=0).requires_grad_(True))
@@ -1111,7 +1121,7 @@ def rgbd_slam(config: dict):
                 '''
                 params, variables = add_new_gaussians(params, variables, densify_curr_data, 
                                                       config['mapping']['sil_thres'], time_idx,
-                                                      config['mean_sq_dist_method'],"isotropic")
+                                                      config['mean_sq_dist_method'], config['gaussian_distribution'])
                 post_num_pts = params['means3D'].shape[0]# 记录添加新的高斯后，post_num_pts是高斯分布数量
                 if config['use_wandb']:
                     wandb_run.log({"Mapping/Number of Gaussians": post_num_pts,
